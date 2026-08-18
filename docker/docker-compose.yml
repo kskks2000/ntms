@@ -7,8 +7,8 @@
 # 주의
 #   - postgres / redis 는 호스트 포트를 열지 않는다. 컨테이너 네트워크
 #     내부에서만 접근한다. 외부 노출은 nginx(80/443)뿐이다.
-#   - db/ddl/*.sql 은 최초 기동 시 파일명 순서대로 자동 실행된다.
-#     (00_init → 01_enum → ... → 92_rls)
+#   - db/ddl/ 의 *.sql 과 *.sh 는 최초 기동 시 파일명 순서대로
+#     자동 실행된다. (00_init → 01_enum → ... → 92_rls → 93_app_role)
 #     이미 데이터가 있는 볼륨에서는 실행되지 않는다.
 # =====================================================================
 
@@ -31,7 +31,8 @@ services:
       PGTZ: Asia/Seoul
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      # 최초 기동 시 DDL 자동 적용 (파일명 사전순 실행)
+      # 최초 기동 시 DDL 자동 적용 (파일명 사전순 실행).
+      # 93_app_role.sh 가 같은 디렉터리에 있어 92_rls.sql 직후 실행된다.
       - ../db/ddl:/docker-entrypoint-initdb.d:ro
       - ../db/backup:/backup
     command:
@@ -121,7 +122,10 @@ services:
       NODE_ENV: production
       PORT: 4000
       TZ: Asia/Seoul
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ntms}?schema=ntms&connection_limit=20&pool_timeout=20
+      # 반드시 ntms_app 으로 접속한다. POSTGRES_USER(슈퍼유저)로 붙으면
+      # FORCE ROW LEVEL SECURITY 까지 우회되어 테넌트 격리가 조용히 사라진다.
+      # 로그인 권한은 db/ddl/93_app_role.sh 가 부여한다.
+      DATABASE_URL: postgresql://ntms_app:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ntms}?schema=ntms&connection_limit=20&pool_timeout=20
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET 를 .env 에 설정하세요}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET 를 .env 에 설정하세요}

@@ -72,7 +72,7 @@ ALTER TABLE ntms.rate_table
     ADD CONSTRAINT ex_rate_table_period
     EXCLUDE USING gist (
         tenant_id WITH =,
-        (rate_target::TEXT) WITH =,
+        rate_target WITH =,
         (COALESCE(partner_id, 0)) WITH =,
         rate_table_code WITH =,
         (daterange(apply_start_date, COALESCE(apply_end_date, DATE '9999-12-31'), '[]')) WITH &&

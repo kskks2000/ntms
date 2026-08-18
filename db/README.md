@@ -45,6 +45,7 @@ psql -U postgres -h localhost -d ntms -v ON_ERROR_STOP=1 -f db/run_all.sql
 | `90_partition.sql` | 파티션 생성 및 관리 함수 |
 | `91_trigger.sql` | 공통 트리거 부착 |
 | `92_rls.sql` | 행 수준 보안 정책 |
+| `93_app_role.sh` | Docker 전용. `ntms_app` / `ntms_admin` 에 로그인 권한 부여 |
 
 ---
 
