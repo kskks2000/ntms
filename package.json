@@ -19,14 +19,28 @@
     "db:ddl": "psql -U postgres -h localhost -d ntms -v ON_ERROR_STOP=1 -f db/run_all.sql",
     "db:drop": "psql -U postgres -h localhost -c \"DROP DATABASE IF EXISTS ntms\"",
     "db:reset": "pnpm db:drop && pnpm db:create && pnpm db:ddl && pnpm db:pull",
-    "db:pull": "pnpm --filter @ntms/db exec prisma db pull && pnpm --filter @ntms/db exec prisma generate",
-    "db:studio": "pnpm --filter @ntms/db exec prisma studio"
+    "_comment_prisma": "Prisma 는 .env 를 CWD 기준으로 찾는다. 저장소 루트에서 --schema 로 실행해야 루트 .env 가 로드된다.",
+    "db:pull": "prisma db pull --schema packages/db/prisma/schema.prisma && pnpm db:generate",
+    "db:generate": "prisma generate --schema packages/db/prisma/schema.prisma",
+    "db:studio": "prisma studio --schema packages/db/prisma/schema.prisma"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
+    "@types/node": "^24.0.0",
     "prettier": "^3.4.0",
+    "prisma": "^6.2.0",
     "rimraf": "^6.0.0",
     "turbo": "^2.3.0",
     "typescript": "^5.7.0"
+  },
+  "pnpm": {
+    "//": "pnpm 10 부터 postinstall 스크립트는 기본 차단된다(공급망 공격 방어). 네이티브 바이너리나 코드 생성이 필요한 패키지만 여기에 명시적으로 허용한다. 새 패키지를 추가할 때 install 경고에 뜨는 이름을 검토 후 넣을 것.",
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "esbuild",
+      "prisma",
+      "sharp",
+      "unrs-resolver"
+    ]
   }
 }

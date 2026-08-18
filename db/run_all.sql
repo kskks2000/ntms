@@ -15,6 +15,10 @@
 \set ON_ERROR_STOP on
 \timing on
 
+-- DDL 파일은 전부 UTF-8 이다. Windows 콘솔 기본 코드페이지(949)로 읽으면
+-- 한글 주석이 깨지거나 인코딩 에러가 난다. 세션 인코딩을 먼저 고정한다.
+\encoding UTF8
+
 \echo '=== 00_init : 스키마 · 확장 · 도메인 · 공통함수 ==='
 \i db/ddl/00_init.sql
 

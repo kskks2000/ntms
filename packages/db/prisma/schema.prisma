@@ -14,7 +14,9 @@
 
 generator client {
   provider = "prisma-client-js"
-  output   = "../node_modules/.prisma/client"
+  // output 을 지정하지 않는다.
+  // pnpm 의 격리된 node_modules 구조에서는 커스텀 경로가 모듈 해석을 깨뜨린다.
+  // 기본값이면 Prisma 가 실제 @prisma/client 패키지 위치에 직접 생성한다.
 }
 
 datasource db {
