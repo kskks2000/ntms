@@ -1,0 +1,45 @@
+# Auto detect text files and normalize line endings to LF in the repo
+* text=auto eol=lf
+
+# Force LF for these
+*.sh text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Force CRLF for Windows scripts
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files (never diff / never modify line endings)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.7z binary
+*.rar binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.mp4 binary
+*.mov binary
+*.mp3 binary
+*.wav binary
+
+# Mark generated/vendored files so they're excluded from GitHub language stats & diffs
+/dist/** linguist-generated
+/build/** linguist-generated
+*.min.js linguist-generated
+*.min.css linguist-generated
