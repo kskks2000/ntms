@@ -1,0 +1,32 @@
+{
+  "name": "ntms",
+  "version": "0.1.0",
+  "private": true,
+  "description": "통합 연계 운송관리시스템 (Transport Management System)",
+  "packageManager": "pnpm@10.0.0",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "clean": "turbo run clean && rimraf node_modules",
+    "db:create": "psql -U postgres -h localhost -c \"CREATE DATABASE ntms ENCODING 'UTF8' TEMPLATE template0\"",
+    "db:ddl": "psql -U postgres -h localhost -d ntms -v ON_ERROR_STOP=1 -f db/run_all.sql",
+    "db:drop": "psql -U postgres -h localhost -c \"DROP DATABASE IF EXISTS ntms\"",
+    "db:reset": "pnpm db:drop && pnpm db:create && pnpm db:ddl && pnpm db:pull",
+    "db:pull": "pnpm --filter @ntms/db exec prisma db pull && pnpm --filter @ntms/db exec prisma generate",
+    "db:studio": "pnpm --filter @ntms/db exec prisma studio"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "prettier": "^3.4.0",
+    "rimraf": "^6.0.0",
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0"
+  }
+}

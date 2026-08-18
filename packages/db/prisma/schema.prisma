@@ -1,0 +1,28 @@
+// =====================================================================
+// NTMS Prisma 스키마
+//
+// 이 파일의 model 블록은 손으로 쓰지 않는다.
+// 스키마의 진실은 db/ddl/*.sql 이며, 아래 명령으로 역생성한다.
+//
+//   pnpm db:ddl     # DDL 적용 (권한: ntms_admin 또는 superuser)
+//   pnpm db:pull    # DB -> schema.prisma 역생성 + 타입 생성
+//
+// prisma migrate 는 사용하지 않는다. RLS 정책 · 파티션 · GiST 배제제약 ·
+// 도메인 · 트리거는 Prisma 스키마 언어로 표현할 수 없어서, migrate 를 쓰면
+// 그것들이 통째로 사라진다.
+// =====================================================================
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL") // 예: postgresql://user:pw@host:5432/ntms?schema=ntms
+}
+
+// ---------------------------------------------------------------------
+// 여기부터 `prisma db pull` 이 모델을 채운다.
+// 최초 실행 전에는 비어 있는 것이 정상이다.
+// ---------------------------------------------------------------------

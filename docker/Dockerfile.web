@@ -1,0 +1,61 @@
+# =====================================================================
+# NTMS Web (Next.js) — standalone 출력 기반 멀티스테이지 빌드
+#   next.config.ts 에 output: 'standalone' 이 설정되어 있어야 한다.
+# =====================================================================
+
+FROM node:24-alpine AS deps
+WORKDIR /app
+
+RUN corepack enable && corepack prepare pnpm@10.0.0 --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/web/package.json          apps/web/
+COPY packages/shared/package.json   packages/shared/
+
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm config set store-dir /pnpm/store && \
+    pnpm install --frozen-lockfile
+
+# ---------------------------------------------------------------------
+FROM node:24-alpine AS builder
+WORKDIR /app
+
+RUN corepack enable && corepack prepare pnpm@10.0.0 --activate
+
+# NEXT_PUBLIC_* 은 빌드 시점에 번들로 구워진다. 런타임 환경변수로는 못 바꾼다.
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ENV NEXT_TELEMETRY_DISABLED=1
+
+COPY --from=deps /app/node_modules                 ./node_modules
+COPY --from=deps /app/apps/web/node_modules        ./apps/web/node_modules
+COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
+COPY . .
+
+RUN pnpm --filter @ntms/shared build \
+ && pnpm --filter @ntms/web build
+
+# ---------------------------------------------------------------------
+FROM node:24-alpine AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    TZ=Asia/Seoul \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+
+RUN apk add --no-cache tzdata dumb-init \
+ && addgroup -g 1001 -S nodejs \
+ && adduser  -u 1001 -S nextjs -G nodejs
+
+# standalone 출력은 필요한 node_modules 를 이미 포함하고 있다
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/static     ./apps/web/.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/public           ./apps/web/public
+
+USER nextjs
+EXPOSE 3000
+
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "apps/web/server.js"]

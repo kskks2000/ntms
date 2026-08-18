@@ -1,0 +1,29 @@
+# 빌드 컨텍스트에서 제외 — 이미지 크기와 빌드 시간에 직결된다
+**/node_modules
+**/.next
+**/dist
+**/build
+**/coverage
+**/.turbo
+
+.git
+.github
+.vscode
+.idea
+
+**/.env
+**/.env.*
+!**/.env.example
+
+**/*.log
+**/npm-debug.log*
+**/pnpm-debug.log*
+
+# DB DDL 은 postgres 서비스가 볼륨 마운트로 읽는다. 이미지에 넣지 않는다.
+db/backup
+
+**/*.md
+!README.md
+
+**/.DS_Store
+**/Thumbs.db

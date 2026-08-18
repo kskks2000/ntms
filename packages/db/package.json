@@ -1,0 +1,31 @@
+{
+  "name": "@ntms/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pull": "prisma db pull && prisma generate",
+    "generate": "prisma generate",
+    "studio": "prisma studio",
+    "clean": "rimraf dist node_modules/.prisma"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.2.0"
+  },
+  "devDependencies": {
+    "prisma": "^6.2.0",
+    "rimraf": "^6.0.0",
+    "typescript": "^5.7.0"
+  }
+}

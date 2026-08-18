@@ -1,0 +1,69 @@
+# =====================================================================
+# NTMS API (Nest.js) — 멀티스테이지 빌드
+#   빌드 컨텍스트는 저장소 루트다.
+#   docker compose -f docker/docker-compose.yml build api
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# 1) 의존성 설치 (레이어 캐시 극대화)
+# ---------------------------------------------------------------------
+FROM node:24-alpine AS deps
+WORKDIR /app
+
+RUN corepack enable && corepack prepare pnpm@10.0.0 --activate
+
+# 매니페스트만 먼저 복사한다. 소스가 바뀌어도 의존성 레이어는 재사용된다.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/api/package.json          apps/api/
+COPY packages/db/package.json       packages/db/
+COPY packages/shared/package.json   packages/shared/
+
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm config set store-dir /pnpm/store && \
+    pnpm install --frozen-lockfile
+
+# ---------------------------------------------------------------------
+# 2) 빌드
+# ---------------------------------------------------------------------
+FROM node:24-alpine AS builder
+WORKDIR /app
+
+RUN corepack enable && corepack prepare pnpm@10.0.0 --activate
+
+COPY --from=deps /app/node_modules                    ./node_modules
+COPY --from=deps /app/apps/api/node_modules           ./apps/api/node_modules
+COPY --from=deps /app/packages/db/node_modules        ./packages/db/node_modules
+COPY --from=deps /app/packages/shared/node_modules    ./packages/shared/node_modules
+COPY . .
+
+# Prisma Client 생성 → 공용 패키지 → API 순서로 빌드
+RUN pnpm --filter @ntms/db exec prisma generate \
+ && pnpm --filter @ntms/shared build \
+ && pnpm --filter @ntms/db build \
+ && pnpm --filter @ntms/api build
+
+# 운영 의존성만 남긴다
+RUN pnpm --filter @ntms/api --prod deploy /out \
+ && cp -r packages/db/node_modules/.prisma /out/node_modules/.prisma 2>/dev/null || true
+
+# ---------------------------------------------------------------------
+# 3) 런타임
+# ---------------------------------------------------------------------
+FROM node:24-alpine AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    TZ=Asia/Seoul
+
+RUN apk add --no-cache tzdata dumb-init \
+ && addgroup -g 1001 -S nodejs \
+ && adduser  -u 1001 -S nestjs -G nodejs
+
+COPY --from=builder --chown=nestjs:nodejs /out ./
+
+USER nestjs
+EXPOSE 4000
+
+# PID 1 신호 처리 — SIGTERM 이 Node 까지 전달되어야 graceful shutdown 이 된다
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "dist/main.js"]
