@@ -49,6 +49,55 @@ function todayAt(hour: number, minute = 0): Date {
   return d;
 }
 const addMinutes = (d: Date, m: number) => new Date(d.getTime() + m * 60_000);
+const addDays = (d: Date, n: number) => new Date(d.getTime() + n * 86_400_000);
+
+/**
+ * `date` 컬럼에 넣을 값을 UTC 자정으로 맞춘다.
+ *
+ * 로컬 자정으로 만든 Date 는 KST(+9) 에서 전날 15시 UTC 가 되고, Postgres 의
+ * date 는 UTC 날짜만 취하므로 하루 앞당겨 저장된다. 2026-01-01 로 넣은 계약
+ * 시작일이 화면에 2025-12-31 로 뜨는 것이 그 증상이다.
+ */
+const dateOnly = (d: Date) =>
+  new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+
+/**
+ * 만료일을 실제 차고처럼 흩는다.
+ *
+ * 유효기간 게이지는 기준정보 화면의 핵심 장치인데, 모든 값이 여유롭거나
+ * 모두 비어 있으면 그 장치가 한 번도 켜지지 않는다. 대략 1/8 은 이미 지났고
+ * 1/6 은 두 달 안에 끝나며, 나머지는 90~360일 사이에 고르게 퍼지도록 한다.
+ * 남은 날이 제각각이어야 게이지 막대의 길이 차이가 정보로 읽힌다.
+ *
+ * 난수 대신 해시를 쓴다 — 실행할 때마다 화면이 달라지면 확인이 어렵다.
+ * `seq * 4 + slot` 같은 선형식은 슬롯마다 나머지가 고정돼(보험은 전부 만료,
+ * 면허는 전부 임박) 열 하나가 한 가지 색으로만 칠해지므로 쓰지 않는다.
+ *
+ * @param seq  대상의 일련번호
+ * @param slot 같은 대상이 여러 기한을 가질 때 겹치지 않게 하는 오프셋
+ */
+function expiryFor(seq: number, slot: number): Date {
+  const h = hash32(seq * 7 + slot * 101);
+  const bucket = h % 24;
+  const days =
+    bucket < 3
+      ? -(3 + ((h >>> 5) % 120))
+      : bucket < 7
+        ? 5 + ((h >>> 5) % 55)
+        : 90 + ((h >>> 5) % 271);
+  return dateOnly(addDays(new Date(), days));
+}
+
+/** 32비트 정수 해시 (Thomas Wang). 값을 흩기만 하면 되므로 이 정도면 충분하다 */
+function hash32(n: number): number {
+  let x = n | 0;
+  x = (x ^ 61) ^ (x >>> 16);
+  x = x + (x << 3);
+  x = x ^ (x >>> 4);
+  x = Math.imul(x, 0x27d4eb2d);
+  x = x ^ (x >>> 15);
+  return x >>> 0;
+}
 
 const MINUTES_PER_DAY = 24 * 60;
 const clampToDay = (m: number) => Math.max(0, Math.min(MINUTES_PER_DAY - 1, Math.round(m)));
@@ -94,24 +143,30 @@ const VEHICLE_TYPES = [
 ] as const;
 
 const SHIPPERS = [
-  { code: 'SH-1001', name: '(주)한빛식품', biz: '3018112345', grade: 'S', tel: '02-555-1200' },
-  { code: 'SH-1002', name: '(주)대명전자', biz: '2148856701', grade: 'A', tel: '031-770-3400' },
-  { code: 'SH-1003', name: '서일화학(주)', biz: '4028834512', grade: 'A', tel: '041-580-2100' },
-  { code: 'SH-1004', name: '(주)미래유통', biz: '1138645902', grade: 'B', tel: '02-2020-7700' },
+  { code: 'SH-1001', name: '(주)한빛식품', biz: '3018112345', grade: 'S', tel: '02-555-1200', mgr: '정하윤', mgrTel: '010-3412-7781', credit: 500_000_000, terms: 45, ceo: '한명수' },
+  { code: 'SH-1002', name: '(주)대명전자', biz: '2148856701', grade: 'A', tel: '031-770-3400', mgr: '오세진', mgrTel: '010-2287-4460', credit: 300_000_000, terms: 30, ceo: '유대현' },
+  { code: 'SH-1003', name: '서일화학(주)', biz: '4028834512', grade: 'A', tel: '041-580-2100', mgr: '배성호', mgrTel: '010-9930-1152', credit: 300_000_000, terms: 30, ceo: '곽재승' },
+  { code: 'SH-1004', name: '(주)미래유통', biz: '1138645902', grade: 'B', tel: '02-2020-7700', mgr: '한지원', mgrTel: '010-7745-2038', credit: 150_000_000, terms: 20, ceo: '민경호' },
 ] as const;
 
 const CARRIERS = [
-  { code: 'CR-2001', name: '(주)한결운수', biz: '6068811234', grade: 'S', tel: '051-600-8800' },
-  { code: 'CR-2002', name: '동아로지스(주)', biz: '3138822345', grade: 'A', tel: '032-450-1900' },
-  { code: 'CR-2003', name: '삼진택배운송', biz: '5148833456', grade: 'B', tel: '062-950-2300' },
-  { code: 'CR-2004', name: '신흥물류(주)', biz: '4038844567', grade: 'A', tel: '043-260-5500' },
-  { code: 'CR-2005', name: '대륙운송(주)', biz: '2028855678', grade: 'B', tel: '053-580-4100' },
+  { code: 'CR-2001', name: '(주)한결운수', biz: '6068811234', grade: 'S', tel: '051-600-8800', mgr: '김도현', mgrTel: '010-5521-6604', terms: 20, ceo: '주영달' },
+  { code: 'CR-2002', name: '동아로지스(주)', biz: '3138822345', grade: 'A', tel: '032-450-1900', mgr: '윤태경', mgrTel: '010-3308-9917', terms: 30, ceo: '차동혁' },
+  { code: 'CR-2003', name: '삼진택배운송', biz: '5148833456', grade: 'B', tel: '062-950-2300', mgr: '문상철', mgrTel: '010-6614-3325', terms: 30, ceo: '엄상범' },
+  { code: 'CR-2004', name: '신흥물류(주)', biz: '4038844567', grade: 'A', tel: '043-260-5500', mgr: '서민경', mgrTel: '010-2119-7743', terms: 25, ceo: '나종길' },
+  { code: 'CR-2005', name: '대륙운송(주)', biz: '2028855678', grade: 'B', tel: '053-580-4100', mgr: '조현우', mgrTel: '010-8802-5510', terms: 30, ceo: '천우석' },
 ] as const;
 
 const CONSIGNEES = [
-  { code: 'CN-3001', name: '수도권물류센터', tel: '031-8000-1000' },
-  { code: 'CN-3002', name: '영남권 대리점', tel: '051-900-2000' },
-  { code: 'CN-3003', name: '호남권 대리점', tel: '062-700-3000' },
+  { code: 'CN-3001', name: '수도권물류센터', tel: '031-8000-1000', mgr: '임채원', mgrTel: '010-4470-8823', ceo: '구본석' },
+  { code: 'CN-3002', name: '영남권 대리점', tel: '051-900-2000', mgr: '노기석', mgrTel: '010-7036-1194', ceo: '탁현서' },
+  { code: 'CN-3003', name: '호남권 대리점', tel: '062-700-3000', mgr: '강수아', mgrTel: '010-5583-2270', ceo: '방인규' },
+] as const;
+
+/** 매입처. 운송사와 달리 운송을 대지 않고 원가만 붙는다 (유류 · 정비 · 부대) */
+const VENDORS = [
+  { code: 'VD-5001', name: '대성에너지(주)', biz: '1078812340', tel: '02-410-6600', mgr: '진형준', mgrTel: '010-3350-8871', ceo: '최광일', terms: 15 },
+  { code: 'VD-5002', name: '한성정비센터', biz: '3098823451', tel: '031-350-7200', mgr: '허성민', mgrTel: '010-8827-3312', ceo: '위재훈', terms: 30 },
 ] as const;
 
 const LOCATIONS = [
@@ -126,6 +181,39 @@ const LOCATIONS = [
   { code: 'LC-CJPL', name: '청주 공장', type: 'PLANT', zone: 'ZN-CHU', addr: '충청북도 청주시 흥덕구 산단로 123', lat: 36.63, lng: 127.43, dock: 6 },
   { code: 'LC-GJST', name: '광주 지점', type: 'STORE', zone: 'ZN-HOS', addr: '광주광역시 광산구 하남산단로 200', lat: 35.17, lng: 126.79, dock: 4 },
 ] as const;
+
+/**
+ * 거점 유형이 정하는 운영 조건.
+ *
+ * 편성 엔진은 여기 있는 네 값으로 시간창과 정차 시간을 잡는다. 항만은
+ * 24시간 돌지만 반출입에 시간이 걸리고 지게차 대신 크레인을 쓰며 예약이
+ * 필수다. 점포는 낮에만 열고 물량이 작아 금방 끝난다. 이 차이가 그대로
+ * 배차 결과를 가른다.
+ */
+/** 좌표를 아직 확인하지 않은 거점. 이 곳이 낀 구간은 거리가 틀어질 수 있다 */
+const UNVERIFIED_GEO = new Set(['LC-GJST', 'LC-CJPL']);
+
+const LOCATION_PROFILE: Record<
+  string,
+  {
+    open: string;
+    close: string;
+    load: number;
+    unload: number;
+    forklift: boolean;
+    reserve: boolean;
+  }
+> = {
+  PORT: { open: '00:00', close: '23:59', load: 70, unload: 60, forklift: false, reserve: true },
+  HUB: { open: '00:00', close: '23:59', load: 30, unload: 25, forklift: true, reserve: false },
+  DC: { open: '06:00', close: '22:00', load: 45, unload: 40, forklift: true, reserve: false },
+  WAREHOUSE: { open: '08:00', close: '20:00', load: 50, unload: 45, forklift: true, reserve: false },
+  PLANT: { open: '08:00', close: '18:00', load: 60, unload: 50, forklift: true, reserve: true },
+  STORE: { open: '09:00', close: '18:00', load: 25, unload: 20, forklift: false, reserve: false },
+};
+
+/** "HH:MM" 을 time 컬럼용 Date 로. 로컬 시각으로 만들면 UTC 저장 때 밀린다 */
+const clockAt = (hhmm: string) => new Date(`1970-01-01T${hhmm}:00Z`);
 
 /** 실제로 물동량이 도는 구간. 거리·소요시간은 라우트 마스터로도 저장한다 */
 const LANES = [
@@ -143,11 +231,26 @@ const LANES = [
   { from: 'LC-ASCDC', to: 'LC-GJST', km: 268, min: 216, toll: 20900 },
 ] as const;
 
+/**
+ * 기사 명부. 앞의 24명이 재직이고 뒤의 4명이 휴직·정지·퇴사다.
+ *
+ * 차량 24대에 재직 기사를 한 명씩 붙여야 하므로 명부는 차량 수보다 크다.
+ * 명부 인원과 실제 배차 가능 인원이 다르다는 것이 기사 화면의 요점이다.
+ */
 const DRIVER_NAMES = [
   '김상호', '박정민', '이근우', '최영달', '정재현', '한동수', '오세진', '윤기태',
   '장병철', '임형준', '서만수', '조광일', '신대호', '권영수', '문태식', '배중근',
   '황인철', '노경식', '전상우', '고재만', '심우석', '류병호', '남기훈', '양동일',
+  '표성진', '용해균', '지창민', '석동환',
 ] as const;
+
+/** 재직이 아닌 기사는 명부 끝에 몰아 둔다 — 앞의 24명이 배차 대상이다 */
+const NON_ACTIVE_DRIVERS: Record<number, 'LEAVE' | 'SUSPENDED' | 'RESIGNED'> = {
+  24: 'LEAVE',
+  25: 'LEAVE',
+  26: 'SUSPENDED',
+  27: 'RESIGNED',
+};
 
 const ITEM_NAMES = [
   '생수 2L 6입', '라면 박스', '조미료 세트', '냉동만두', '식용유 18L',
@@ -251,8 +354,19 @@ async function main(): Promise<void> {
     const partnerName = new Map<bigint, string>();
 
     const createPartner = async (
-      p: { code: string; name: string; biz?: string; grade?: string; tel?: string },
-      roles: { shipper?: boolean; carrier?: boolean; consignee?: boolean },
+      p: {
+        code: string;
+        name: string;
+        biz?: string;
+        grade?: string;
+        tel?: string;
+        mgr?: string;
+        mgrTel?: string;
+        ceo?: string;
+        credit?: number;
+        terms?: number;
+      },
+      roles: { shipper?: boolean; carrier?: boolean; consignee?: boolean; vendor?: boolean },
     ) => {
       const row = await prisma.business_partner.create({
         data: {
@@ -262,13 +376,19 @@ async function main(): Promise<void> {
           is_shipper: roles.shipper ?? false,
           is_carrier: roles.carrier ?? false,
           is_consignee: roles.consignee ?? false,
-          is_vendor: false,
+          is_vendor: roles.vendor ?? false,
           business_no: p.biz ?? null,
           tel: p.tel ?? null,
+          ceo_name: p.ceo ?? null,
+          manager_name: p.mgr ?? null,
+          manager_tel: p.mgrTel ?? null,
           grade: (p.grade as 'S' | 'A' | 'B' | 'C' | 'D') ?? null,
           settlement_cycle: 'MONTHLY',
           closing_day: 31,
-          payment_terms_days: 30,
+          // 유예일은 협상 결과라 거래처마다 다르다. 등급이 좋을수록 길다
+          payment_terms_days: p.terms ?? 30,
+          // 여신한도는 화주에게만 건다 — 운송사는 우리가 돈을 주는 쪽이다
+          credit_limit: p.credit ?? null,
         },
       });
       partnerId.set(p.code, row.partner_id);
@@ -279,9 +399,11 @@ async function main(): Promise<void> {
     for (const p of SHIPPERS) await createPartner(p, { shipper: true });
     for (const p of CARRIERS) await createPartner(p, { carrier: true });
     for (const p of CONSIGNEES) await createPartner(p, { consignee: true });
+    for (const p of VENDORS) await createPartner(p, { vendor: true });
     console.log(
-      `거래처 ${SHIPPERS.length + CARRIERS.length + CONSIGNEES.length}건 ` +
-        `(화주 ${SHIPPERS.length} · 운송사 ${CARRIERS.length} · 수하처 ${CONSIGNEES.length})`,
+      `거래처 ${SHIPPERS.length + CARRIERS.length + CONSIGNEES.length + VENDORS.length}건 ` +
+        `(화주 ${SHIPPERS.length} · 운송사 ${CARRIERS.length} · ` +
+        `수하처 ${CONSIGNEES.length} · 매입처 ${VENDORS.length})`,
     );
 
     // --- 상하차지 ---------------------------------------------------
@@ -291,6 +413,7 @@ async function main(): Promise<void> {
       { id: bigint; name: string; addr: string; lat: number; lng: number; zone: bigint }
     >();
     for (const l of LOCATIONS) {
+      const profile = LOCATION_PROFILE[l.type]!;
       const row = await prisma.location.create({
         data: {
           tenant_id: tenantId,
@@ -301,13 +424,15 @@ async function main(): Promise<void> {
           address1: l.addr,
           latitude: l.lat,
           longitude: l.lng,
-          geo_verified: true,
+          // 좌표 검증은 실무에서 잘 밀린다. 새로 튼 거점 몇 곳은 미검증으로 둔다
+          geo_verified: !UNVERIFIED_GEO.has(l.code),
           dock_count: l.dock,
-          open_time: new Date('1970-01-01T06:00:00Z'),
-          close_time: new Date('1970-01-01T22:00:00Z'),
-          standard_load_min: 45,
-          standard_unload_min: 40,
-          has_forklift: true,
+          open_time: clockAt(profile.open),
+          close_time: clockAt(profile.close),
+          standard_load_min: profile.load,
+          standard_unload_min: profile.unload,
+          has_forklift: profile.forklift,
+          require_reservation: profile.reserve,
           is_pickup_available: true,
           is_delivery_available: true,
         },
@@ -325,7 +450,35 @@ async function main(): Promise<void> {
     console.log(`상하차지 ${LOCATIONS.length}건`);
 
     // --- 라우트(구간거리) -------------------------------------------
+    //
+    // 간선은 대개 왕복으로 등록한다 — 복로가 없으면 돌아오는 트립의 거리가
+    // 잡히지 않아 운임이 한쪽만 계산된다. 여기서는 간선 대부분에 역방향을
+    // 만들되 몇 구간은 일부러 편도로 남긴다. "편도만 등록" 지표가 실제로
+    // 잡아내야 할 상태이므로, 전부 왕복이면 그 지표가 늘 0이 되어 죽는다.
+    const ONE_WAY_ONLY = new Set(['LC-ICPORT>LC-CJPL', 'LC-YSICD>LC-GCHUB']);
+    const routes: Array<{
+      from: string;
+      to: string;
+      km: number;
+      min: number;
+      toll: number;
+    }> = [];
     for (const lane of LANES) {
+      routes.push({ ...lane });
+      if (ONE_WAY_ONLY.has(`${lane.from}>${lane.to}`)) continue;
+      // 이미 반대 방향이 원본에 있으면 두 번 넣지 않는다
+      if (LANES.some((o) => o.from === lane.to && o.to === lane.from)) continue;
+      // 복로는 같은 길이 아니다. 회차 구간과 신호 때문에 조금 더 걸린다
+      routes.push({
+        from: lane.to,
+        to: lane.from,
+        km: Math.round(lane.km * 1.02),
+        min: Math.round(lane.min * 1.04),
+        toll: lane.toll,
+      });
+    }
+
+    for (const [i, lane] of routes.entries()) {
       await prisma.distance_master.create({
         data: {
           tenant_id: tenantId,
@@ -335,12 +488,14 @@ async function main(): Promise<void> {
           distance_km: lane.km,
           duration_minutes: lane.min,
           toll_fee: lane.toll,
-          source: 'MANUAL',
-          last_verified_at: new Date(),
+          // 지도 API 로 받은 것과 사람이 고친 것이 섞여 있는 게 보통이다
+          source: i % 3 === 0 ? 'MANUAL' : 'MAP_API',
+          // 확인 시점도 제각각이다. 오래된 구간일수록 다시 재 볼 값이다
+          last_verified_at: addDays(new Date(), -((hash32(i * 13) % 300) + 5)),
         },
       });
     }
-    console.log(`라우트 ${LANES.length}건`);
+    console.log(`라우트 ${routes.length}건`);
 
     // --- 기사 · 차량 -------------------------------------------------
     const driverIds: bigint[] = [];
@@ -353,12 +508,21 @@ async function main(): Promise<void> {
           driver_name: name,
           carrier_id: partnerId.get(carrier.code)!,
           mobile: `010-${String(intBetween(2000, 9999))}-${String(intBetween(1000, 9999))}`,
-          license_type: '1종 대형',
-          license_expire_date: new Date(2029, intBetween(0, 11), intBetween(1, 28)),
-          hire_date: new Date(2019 + (i % 6), intBetween(0, 11), intBetween(1, 28)),
-          on_time_rate: Number(between(91, 99.5).toFixed(2)),
+          license_type: pick(['1종 대형', '1종 대형', '1종 보통', '1종 특수(트레일러)']),
+          license_expire_date: expiryFor(i, 2),
+          cargo_qualification_no: `CQ-${intBetween(10000, 99999)}`,
+          cargo_qualification_expire_date: expiryFor(i, 3),
+          hire_date: dateOnly(
+            new Date(2019 + (i % 6), intBetween(0, 11), intBetween(1, 28)),
+          ),
+          // 정시율은 화면에서 정수로 읽는다. 소수 둘째 자리까지 저장하면
+          // 없는 정밀도를 있는 것처럼 보이게 한다
+          on_time_rate: Number(between(88, 99.5).toFixed(1)),
           evaluation_score: Number(between(3.6, 4.9).toFixed(1)),
-          status: 'ACTIVE',
+          // 사고 이력은 드물지만 0이 전부면 배차 때 볼 이유가 없는 열이 된다
+          accident_count: i % 8 === 3 ? 1 : i % 11 === 5 ? 2 : 0,
+          status: NON_ACTIVE_DRIVERS[i] ?? 'ACTIVE',
+          is_active: NON_ACTIVE_DRIVERS[i] === undefined,
         },
       });
       driverIds.push(row.driver_id);
@@ -398,6 +562,16 @@ async function main(): Promise<void> {
           max_pallet_qty: vt.pallet,
           fuel_type: 'DIESEL',
           fuel_efficiency: Number(between(2.6, 5.4).toFixed(2)),
+
+          // 보험 · 검사 만료. 실제 차고를 닮게 흩는다 —
+          // 대부분은 여유가 있고, 몇 대는 두 달 안에 끝나고, 한둘은 이미 지났다.
+          // 전부 여유롭게 만들면 만료 경고가 한 번도 뜨지 않아
+          // 그 기능이 동작하는지 확인할 수 없다.
+          insurance_company: pick(['DB손해보험', '삼성화재', 'KB손해보험', '현대해상']),
+          insurance_policy_no: `INS-${intBetween(100000, 999999)}`,
+          insurance_expire_date: expiryFor(i, 0),
+          inspection_date: dateOnly(addDays(new Date(), -intBetween(120, 400))),
+          next_inspection_date: expiryFor(i, 1),
           base_location_id: locId.get(pick(LOCATIONS).code)!,
           default_driver_id: driverIds[i] ?? null,
           status: 'AVAILABLE',
@@ -416,16 +590,69 @@ async function main(): Promise<void> {
     console.log(`기사 ${driverIds.length}명 · 차량 ${vehicleIds.length}대`);
 
     // --- 단가(운임표) -----------------------------------------------
-    const tariffs = [
-      { code: 'RT-BIL-DIST', name: '기본 거리요율 (매출)', target: 'BILLING', method: 'DISTANCE', partner: null },
-      { code: 'RT-BIL-ZONE', name: '권역별 운임 (매출)', target: 'BILLING', method: 'ZONE', partner: 'SH-1001' },
-      { code: 'RT-BIL-TRIP', name: '전세차 운임 (매출)', target: 'BILLING', method: 'PER_TRIP', partner: 'SH-1002' },
-      { code: 'RT-PAY-DIST', name: '기본 거리요율 (매입)', target: 'PAYMENT', method: 'DISTANCE', partner: null },
-      { code: 'RT-PAY-CR01', name: '한결운수 계약요율 (매입)', target: 'PAYMENT', method: 'ZONE', partner: 'CR-2001' },
-      { code: 'RT-PAY-SPOT', name: '스팟 운임 (매입)', target: 'PAYMENT', method: 'PER_TRIP', partner: null },
+    //
+    // 운임표는 머리(rate_table)만 있으면 아무 금액도 계산되지 않는다. 실제로
+    // 금액을 만드는 것은 상세(rate_table_detail) 한 줄 한 줄이므로, 산정방식에
+    // 맞는 상세를 함께 넣는다 — 거리요율은 거리구간 × 톤급, 권역요율은
+    // 출발권역 × 도착권역, 전세차는 차종별 트립 단가다.
+    //
+    // 매입(지급)은 매출(청구)의 약 85% 로 둔다. 그래야 정산 화면에서 마진이
+    // 음수로 뒤집히지 않는다.
+    const PAY_RATIO = 0.85;
+
+    /** 거리요율: 거리 구간 4개 × 톤급 4개. 기본료 + km 단가 */
+    const DISTANCE_BANDS = [
+      { from: 0, to: 50 },
+      { from: 50, to: 150 },
+      { from: 150, to: 300 },
+      { from: 300, to: null },
     ] as const;
+    const DISTANCE_TIERS = [
+      { type: 'CG-25', base: 60_000, perKm: 900 },
+      { type: 'WG-5', base: 95_000, perKm: 1_250 },
+      { type: 'WG-11', base: 150_000, perKm: 1_750 },
+      { type: 'TR-25', base: 230_000, perKm: 2_400 },
+    ] as const;
+
+    /** 권역요율: 실제로 오가는 짝만 넣는다. 없는 짝은 거리요율로 떨어진다 */
+    const ZONE_PAIRS = [
+      { from: 'ZN-CAP', to: 'ZN-CAP', amount: 180_000 },
+      { from: 'ZN-CAP', to: 'ZN-CHU', amount: 320_000 },
+      { from: 'ZN-CAP', to: 'ZN-YEO', amount: 620_000 },
+      { from: 'ZN-CAP', to: 'ZN-HOS', amount: 560_000 },
+      { from: 'ZN-CAP', to: 'ZN-GAN', amount: 380_000 },
+      { from: 'ZN-CHU', to: 'ZN-YEO', amount: 400_000 },
+      { from: 'ZN-CHU', to: 'ZN-HOS', amount: 350_000 },
+      { from: 'ZN-YEO', to: 'ZN-CAP', amount: 640_000 },
+      { from: 'ZN-HOS', to: 'ZN-CAP', amount: 580_000 },
+    ] as const;
+
+    /** 전세차: 차종 하나에 트립 단가 하나 */
+    const TRIP_RATES: Record<string, number> = {
+      'CG-1': 130_000,
+      'CG-25': 190_000,
+      'WG-5': 280_000,
+      'WG-11': 430_000,
+      'RF-5': 340_000,
+      'RF-11': 520_000,
+      'TR-25': 700_000,
+    };
+
+    const tariffs = [
+      { code: 'RT-BIL-DIST', name: '기본 거리요율 (매출)', target: 'BILLING', method: 'DISTANCE', partner: null, openEnded: true, endsSoon: false, minCharge: 90_000, fuel: true, taxable: true },
+      { code: 'RT-BIL-ZONE', name: '권역별 운임 (매출)', target: 'BILLING', method: 'ZONE', partner: 'SH-1001', openEnded: false, endsSoon: false, minCharge: 150_000, fuel: true, taxable: true },
+      { code: 'RT-BIL-TRIP', name: '전세차 운임 (매출)', target: 'BILLING', method: 'PER_TRIP', partner: 'SH-1002', openEnded: false, endsSoon: true, minCharge: 130_000, fuel: false, taxable: true },
+      { code: 'RT-PAY-DIST', name: '기본 거리요율 (매입)', target: 'PAYMENT', method: 'DISTANCE', partner: null, openEnded: true, endsSoon: false, minCharge: 75_000, fuel: true, taxable: true },
+      { code: 'RT-PAY-CR01', name: '한결운수 계약요율 (매입)', target: 'PAYMENT', method: 'ZONE', partner: 'CR-2001', openEnded: false, endsSoon: false, minCharge: 120_000, fuel: true, taxable: true },
+      { code: 'RT-PAY-SPOT', name: '스팟 운임 (매입)', target: 'PAYMENT', method: 'PER_TRIP', partner: null, openEnded: false, endsSoon: true, minCharge: 110_000, fuel: false, taxable: false },
+    ] as const;
+
+    const yearStart = dateOnly(new Date(new Date().getFullYear(), 0, 1));
+    const yearEnd = dateOnly(new Date(new Date().getFullYear(), 11, 31));
+    let rateDetailCount = 0;
+
     for (const t of tariffs) {
-      await prisma.rate_table.create({
+      const table = await prisma.rate_table.create({
         data: {
           tenant_id: tenantId,
           rate_table_code: t.code,
@@ -434,17 +661,80 @@ async function main(): Promise<void> {
           rate_method: t.method,
           partner_id: t.partner ? partnerId.get(t.partner)! : null,
           currency_code: 'KRW',
-          apply_start_date: new Date(new Date().getFullYear(), 0, 1),
-          min_charge_amount: 80_000,
-          apply_fuel_surcharge: true,
-          is_taxable: true,
+          apply_start_date: yearStart,
+          // 연 단위 계약이 흔하다. 일부는 무기한으로 두어 두 경우를 다 보인다.
+          apply_end_date: t.endsSoon
+            ? dateOnly(addDays(new Date(), intBetween(12, 50)))
+            : t.openEnded
+              ? null
+              : yearEnd,
+          min_charge_amount: t.minCharge,
+          apply_fuel_surcharge: t.fuel,
+          is_taxable: t.taxable,
           status: 'APPROVED',
           approved_at: new Date(new Date().getFullYear(), 0, 2),
           version_no: 1,
         },
       });
+
+      const scale = t.target === 'PAYMENT' ? PAY_RATIO : 1;
+      const round = (n: number) => Math.round((n * scale) / 1000) * 1000;
+      const details: Array<Record<string, unknown>> = [];
+
+      if (t.method === 'DISTANCE') {
+        for (const tier of DISTANCE_TIERS) {
+          for (const band of DISTANCE_BANDS) {
+            // 멀수록 km 단가가 내려간다 — 실제 운임표가 그렇게 생겼다
+            const taper = band.from >= 300 ? 0.8 : band.from >= 150 ? 0.88 : 1;
+            details.push({
+              vehicle_type_id: vtypeId.get(tier.type)!,
+              distance_from: band.from,
+              distance_to: band.to,
+              base_amount: round(tier.base),
+              unit_rate: Math.round(tier.perKm * taper * scale),
+              min_amount: round(tier.base),
+              // 좁은 구간이 먼저 잡혀야 한다
+              priority: band.to === null ? 90 : 100,
+              remark: `${band.from}~${band.to ?? ''}km`,
+            });
+          }
+        }
+      } else if (t.method === 'ZONE') {
+        for (const pair of ZONE_PAIRS) {
+          details.push({
+            from_zone_id: zoneId.get(pair.from)!,
+            to_zone_id: zoneId.get(pair.to)!,
+            base_amount: round(pair.amount),
+            extra_stop_amount: round(30_000),
+            waiting_free_min: 60,
+            waiting_rate_hour: round(25_000),
+            priority: 100,
+          });
+        }
+      } else {
+        for (const vt of VEHICLE_TYPES) {
+          details.push({
+            vehicle_type_id: vtypeId.get(vt.code)!,
+            base_amount: round(TRIP_RATES[vt.code]!),
+            extra_stop_amount: round(40_000),
+            waiting_free_min: 90,
+            waiting_rate_hour: round(30_000),
+            priority: 100,
+          });
+        }
+      }
+
+      await prisma.rate_table_detail.createMany({
+        data: details.map((d, i) => ({
+          tenant_id: tenantId,
+          rate_table_id: table.rate_table_id,
+          line_no: i + 1,
+          ...d,
+        })) as never,
+      });
+      rateDetailCount += details.length;
     }
-    console.log(`단가 ${tariffs.length}건`);
+    console.log(`단가 ${tariffs.length}건 · 요율 상세 ${rateDetailCount}건`);
 
     // -----------------------------------------------------------------
     // 오더 — 오전 9시 배차실의 상태 분포

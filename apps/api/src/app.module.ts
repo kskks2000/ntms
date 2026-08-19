@@ -7,6 +7,7 @@ import { HealthModule } from './health/health.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { DashboardModule } from './dashboard/dashboard.module.js';
 import { DispatchModule } from './dispatch/dispatch.module.js';
+import { MasterModule } from './master/master.module.js';
 import { OrderModule } from './order/order.module.js';
 import { AllExceptionsFilter } from './common/all-exceptions.filter.js';
 
@@ -28,6 +29,7 @@ import { AllExceptionsFilter } from './common/all-exceptions.filter.js';
     AuthModule,
     DashboardModule,
     DispatchModule,
+    MasterModule,
     OrderModule,
     // 도메인 모듈은 Phase 1 부터 여기에 추가한다
     // MasterModule, OrderModule, PlanModule,
