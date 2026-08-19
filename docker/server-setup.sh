@@ -52,12 +52,23 @@ say "2/5  Docker CE 설치"
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     echo "  이미 설치되어 있다: $(docker --version)"
 else
-    dnf -y install dnf-plugins-core git
-    dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+    # Docker 공식 저장소를 직접 쓴다. dnf config-manager --add-repo 로 받아오면
+    # baseurl 에 $releasever 가 들어가는데, Rocky 8.8 에서는 이게 '8.8' 로 풀려
+    # 존재하지 않는 경로(.../centos/8.8/...)를 보게 되어 404 로 멈춘다.
+    # Docker 저장소는 메이저 버전 경로만 제공하므로 8 로 고정해 적는다.
+    #
+    # 한 번 깨진 저장소가 남아 있으면 이후 모든 dnf 명령이 실패하므로,
+    # 다른 dnf 작업보다 먼저 파일을 덮어쓴다.
+    cat > /etc/yum.repos.d/docker-ce.repo <<'REPO'
+[docker-ce-stable]
+name=Docker CE Stable - $basearch
+baseurl=https://download.docker.com/linux/centos/8/$basearch/stable
+enabled=1
+gpgcheck=1
+gpgkey=https://download.docker.com/linux/centos/gpg
+REPO
 
-    # Rocky 8 의 $releasever 는 '8.8' 로 풀리는데 Docker 저장소는 메이저 버전
-    # 경로('8')만 제공한다. 그대로 두면 repomd.xml 404 로 설치가 멈춘다.
-    sed -i 's/\$releasever/8/g' /etc/yum.repos.d/docker-ce.repo
+    dnf -y install git
 
     # Rocky 8 기본 이미지의 podman/buildah 는 containerd.io 와 충돌한다.
     # --allowerasing 으로 충돌 패키지를 정리하며 설치한다.
