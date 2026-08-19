@@ -17,6 +17,12 @@ export interface ApiError {
   message: string;
   /** 필드별 검증 오류. 폼에 그대로 매핑한다. */
   fields?: Record<string, string[]>;
+  /**
+   * 화면이 문구를 만들 때 쓰는 부가 정보.
+   * 예) 로그인 실패 시 { failCount, maxFailCount } → "5회 중 2회 실패".
+   * 사람이 읽는 문장을 서버가 만들지 않기 위한 자리다.
+   */
+  detail?: Record<string, unknown>;
   traceId?: string;
 }
 

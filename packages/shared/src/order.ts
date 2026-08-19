@@ -6,6 +6,7 @@
  * 사고를 막는 것이 이 패키지의 존재 이유다.
  */
 import { z } from 'zod';
+import type { OrderStatus } from './enums.js';
 import {
   freightTermsSchema,
   orderPrioritySchema,
@@ -132,3 +133,41 @@ export type OrderItemInput = z.infer<typeof orderItemInputSchema>;
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 export type UpdateOrderInput = z.infer<typeof updateOrderSchema>;
 export type OrderListQuery = z.infer<typeof orderListQuerySchema>;
+
+// ---------------------------------------------------------------------
+// 목록 응답
+//
+// 목록 화면은 상세를 다 내려받지 않는다. 오더 하나에 컬럼이 90개인데
+// 그것을 100건씩 실어 보내면 표를 그리기도 전에 네트워크가 먼저 막힌다.
+// 화면에 실제로 그려지는 것만 담는다.
+// ---------------------------------------------------------------------
+
+export interface OrderListItem {
+  orderId: string;
+  orderNo: string;
+  orderDate: string;
+  status: OrderStatus;
+  priority: string;
+  shipperName: string;
+  fromName: string;
+  toName: string;
+  /** HH:mm — 상차 시간창 시작 */
+  pickupFrom: string | null;
+  pickupTo: string | null;
+  deliveryFrom: string | null;
+  weightKg: number;
+  volumeCbm: number;
+  distanceKm: number | null;
+  estimatedAmount: number | null;
+  temperatureZone: string;
+  isTimeCritical: boolean;
+  /** 편성된 트립. 아직 편성 전이면 null */
+  tripNo: string | null;
+}
+
+export interface OrderListSummary {
+  /** 조회 조건에 걸린 전체 건수 · 중량 · 금액 */
+  totalCount: number;
+  totalWeightKg: number;
+  totalAmount: number;
+}

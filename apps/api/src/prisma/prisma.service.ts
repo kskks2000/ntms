@@ -7,6 +7,7 @@ import {
   PrismaClient,
   createPrismaClient,
   withTenant,
+  withTenantBootstrap,
   withoutTenant,
   type TenantContext,
   type TxClient,
@@ -37,6 +38,24 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
    */
   run<T>(ctx: TenantContext, fn: (tx: TxClient) => Promise<T>): Promise<T> {
     return withTenant(this.client, ctx, fn);
+  }
+
+  /**
+   * 사용자 없이 테넌트만 주입한 트랜잭션. **인증 단계 전용.**
+   *
+   * 로그인은 "회사는 알지만 아직 누구인지는 모르는" 구간을 반드시 지난다.
+   * 회사코드로 테넌트를 찾은 뒤 그 테넌트의 계정을 조회해 비밀번호를
+   * 확인하기 전까지가 그 구간이다. RLS 는 app.tenant_id 만 보므로
+   * 이 상태에서도 테넌트 격리는 그대로 유지된다.
+   *
+   * app.user_id 가 없어 created_by/updated_by 가 NULL 로 남는다.
+   * 계정 신청처럼 "행위자가 아직 계정이 아닌" 경우 외에는 쓰지 말 것.
+   */
+  runTenant<T>(
+    ctx: { tenantId: bigint; clientIp?: string },
+    fn: (tx: TxClient) => Promise<T>,
+  ): Promise<T> {
+    return withTenantBootstrap(this.client, ctx, fn);
   }
 
   /**

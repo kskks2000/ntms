@@ -8,6 +8,14 @@
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
     "strictPropertyInitialization": false,
+
+    // nest build 는 deleteOutDir 로 dist 를 먼저 지운다. 그런데 tsc 의
+    // incremental 은 tsconfig.tsbuildinfo 만 보고 "이미 최신" 이라 판단해
+    // 아무것도 내보내지 않는다. 두 번째 빌드부터 dist 가 통째로 비는 이유다.
+    // (도커 이미지에 main.js 가 없는 형태로 드러난다)
+    // API 는 전체 빌드가 몇 초라 증분을 포기하는 편이 안전하다.
+    "incremental": false,
+
     "types": ["node"]
   },
   "include": ["src/**/*"],
