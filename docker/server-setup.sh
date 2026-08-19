@@ -55,6 +55,10 @@ else
     dnf -y install dnf-plugins-core git
     dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
 
+    # Rocky 8 의 $releasever 는 '8.8' 로 풀리는데 Docker 저장소는 메이저 버전
+    # 경로('8')만 제공한다. 그대로 두면 repomd.xml 404 로 설치가 멈춘다.
+    sed -i 's/\$releasever/8/g' /etc/yum.repos.d/docker-ce.repo
+
     # Rocky 8 기본 이미지의 podman/buildah 는 containerd.io 와 충돌한다.
     # --allowerasing 으로 충돌 패키지를 정리하며 설치한다.
     dnf -y install --allowerasing \
