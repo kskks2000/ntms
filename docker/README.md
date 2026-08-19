@@ -174,7 +174,86 @@ docker logs ntms-postgres 2>&1 | grep -iE 'ERROR|FATAL'
 
 ---
 
-## 5. 운영
+## 5. DB 직접 접속 (DBeaver · psql)
+
+postgres 는 인터넷에 열려 있지 않다. 호스트의 **`127.0.0.1:15432`** 에만 묶여
+있으므로, 접속은 **SSH 터널을 통해서만** 가능하다.
+
+호스트 포트를 5432 가 아니라 15432 로 둔 것은 개발 PC 에 네이티브 PostgreSQL 이
+이미 5432 를 쓰고 있어서다. 서버·로컬 양쪽에서 같은 번호를 쓰기 위함이다.
+
+### DBeaver
+
+**Main 탭** — 여기 주소는 *SSH 서버 입장에서* 보이는 주소다.
+
+| 항목 | 값 |
+|---|---|
+| Host | `localhost` |
+| Port | `15432` |
+| Database | `ntms` |
+| Username | `ntms_admin` |
+| Password | 서버 `/opt/ntms/.env` 의 `POSTGRES_PASSWORD` |
+
+**SSH 탭** — `Use SSH Tunnel` 체크
+
+| 항목 | 값 |
+|---|---|
+| Host/IP | `175.45.193.174` |
+| Port | `22` |
+| User Name | `root` |
+| Authentication Method | `Public Key` |
+| Private Key | 인스턴스 PEM 파일 경로 |
+
+Main 탭에 서버 공인 IP 를 넣지 않는다. 터널이 먼저 `175.45.193.174:22` 로 붙은
+뒤, **서버 안에서** Main 탭 주소로 연결하기 때문이다.
+
+비밀번호 확인:
+
+```bash
+ssh <서버> "grep '^POSTGRES_PASSWORD=' /opt/ntms/.env | cut -d= -f2-"
+```
+
+### psql / 터널 직접 열기
+
+```bash
+# 터미널 하나를 터널에 쓴다
+ssh -N -L 15432:localhost:15432 root@175.45.193.174
+
+# 다른 터미널에서
+psql -h localhost -p 15432 -U ntms_admin -d ntms
+```
+
+터널 없이 CLI 만 쓸 거라면 이게 가장 짧다.
+
+```bash
+ssh root@175.45.193.174 docker exec -it ntms-postgres psql -U postgres -d ntms
+```
+
+### 어떤 역할로 붙느냐가 보이는 데이터를 바꾼다
+
+| 역할 | 로그인 | RLS | 용도 |
+|---|---|---|---|
+| `postgres` | O | **우회**(superuser) | 관리 · 긴급 점검 |
+| `ntms_admin` | O | **우회**(BYPASSRLS) | 마이그레이션 · 전체 조회 |
+| `ntms_app` | O | 적용 | 애플리케이션 전용 |
+| `ntms_readonly` | X (NOLOGIN) | 적용 | BI 용, 아직 미개방 |
+
+`ntms_app` 으로 붙으면 테넌트 컨텍스트가 없는 한 **모든 조회가 0건**이다.
+고장이 아니라 RLS 의 안전한 기본값이다. 앱이 실제로 보는 것을 재현하려면:
+
+```sql
+BEGIN;
+SET LOCAL app.tenant_id = '1';
+SELECT * FROM ntms.transport_order;
+COMMIT;
+```
+
+둘러보기 용도라면 `ntms_admin` 을 쓴다. 테이블은 `public` 이 아니라 **`ntms`
+스키마** 아래에 있다.
+
+---
+
+## 6. 운영
 
 ```bash
 cd /opt/ntms
@@ -218,7 +297,7 @@ bash docker/deploy.sh --no-pull
 
 ---
 
-## 6. HTTPS (도메인 확보 후)
+## 7. HTTPS (도메인 확보 후)
 
 **지금은 불가능하다.** Let's Encrypt 는 공인 IP 에 대해 인증서를 발급하지 않는다.
 도메인이 준비된 뒤에 진행한다.
@@ -242,7 +321,7 @@ bash docker/deploy.sh --no-pull
 
 ---
 
-## 7. 트러블슈팅
+## 8. 트러블슈팅
 
 | 증상 | 원인 / 조치 |
 |---|---|
@@ -256,7 +335,7 @@ bash docker/deploy.sh --no-pull
 
 ---
 
-## 8. 아직 하지 않은 것
+## 9. 아직 하지 않은 것
 
 - **SSH 접근 제한** — 22 번이 전 세계에 열려 있고 `root` 직접 로그인 구성이다.
   ACG 에서 소스 IP 를 사무실 대역으로 좁히는 것을 권한다.

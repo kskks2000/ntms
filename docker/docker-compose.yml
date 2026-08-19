@@ -5,8 +5,9 @@
 #   docker compose -f docker/docker-compose.yml --env-file .env up -d
 #
 # 주의
-#   - postgres / redis 는 호스트 포트를 열지 않는다. 컨테이너 네트워크
-#     내부에서만 접근한다. 외부 노출은 nginx(80/443)뿐이다.
+#   - 인터넷에 열리는 것은 nginx(80/443) 뿐이다.
+#     redis 는 호스트 포트를 아예 열지 않고, postgres 만 127.0.0.1:15432 에
+#     묶어 둔다. 루프백이라 외부에서는 닿지 않고, DB 도구는 SSH 터널로 붙는다.
 #   - db/ddl/ 의 *.sql 과 *.sh 는 최초 기동 시 파일명 순서대로
 #     자동 실행된다. (00_init → 01_enum → ... → 92_rls → 93_app_role)
 #     이미 데이터가 있는 볼륨에서는 실행되지 않는다.
@@ -29,6 +30,16 @@ services:
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale-provider=icu --icu-locale=ko-KR"
       TZ: Asia/Seoul
       PGTZ: Asia/Seoul
+    ports:
+      # DBeaver 등 외부 도구용 접속 지점. 반드시 127.0.0.1 에 묶는다.
+      # 이걸 빼먹고 "15432:5432" 로 적으면 0.0.0.0 에 바인딩되어, ACG 설정이
+      # 한 번 바뀌는 순간 DB 가 인터넷에 그대로 열린다.
+      # 접속은 SSH 터널을 통해서만 한다:
+      #   ssh -N -L 15432:localhost:15432 ntms
+      #
+      # 호스트 포트를 5432 가 아니라 15432 로 둔 이유는, 개발 PC 에 네이티브
+      # PostgreSQL 이 이미 5432 를 쓰고 있어 로컬에서 스택이 뜨지 못하기 때문이다.
+      - "127.0.0.1:15432:5432"
     volumes:
       # PostgreSQL 18 이미지는 PGDATA 가 /var/lib/postgresql/18/docker 다.
       # /var/lib/postgresql/data 에 마운트하면 엔트리포인트가 구버전 배치로
