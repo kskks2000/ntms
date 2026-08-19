@@ -44,59 +44,62 @@ export const orderItemInputSchema = z.object({
   remark: z.string().max(500).optional(),
 });
 
-export const createOrderSchema = z
-  .object({
-    orderType: orderTypeSchema.default('DELIVERY'),
-    orderDate: dateSchema,
-    externalOrderNo: z.string().max(50).optional(),
+// refine 을 걸기 전의 순수 오브젝트. update 스키마가 partial/omit 을 하려면
+// ZodObject 여야 하므로 따로 둔다. (ZodEffects 에는 partial 이 없다)
+const orderBaseSchema = z.object({
+  orderType: orderTypeSchema.default('DELIVERY'),
+  orderDate: dateSchema,
+  externalOrderNo: z.string().max(50).optional(),
 
-    shipperId: idSchema,
-    contractId: idSchema.optional(),
-    consigneeId: idSchema.optional(),
+  shipperId: idSchema,
+  contractId: idSchema.optional(),
+  consigneeId: idSchema.optional(),
 
-    // 상차지
-    fromLocationId: idSchema.optional(),
-    fromLocationName: z.string().min(1).max(200),
-    fromZipCode: z.string().max(10).optional(),
-    fromAddress1: z.string().min(1).max(300),
-    fromAddress2: z.string().max(300).optional(),
-    fromContactName: z.string().max(100).optional(),
-    fromContactTel: z.string().max(30).optional(),
+  // 상차지
+  fromLocationId: idSchema.optional(),
+  fromLocationName: z.string().min(1).max(200),
+  fromZipCode: z.string().max(10).optional(),
+  fromAddress1: z.string().min(1).max(300),
+  fromAddress2: z.string().max(300).optional(),
+  fromContactName: z.string().max(100).optional(),
+  fromContactTel: z.string().max(30).optional(),
 
-    // 하차지
-    toLocationId: idSchema.optional(),
-    toLocationName: z.string().min(1).max(200),
-    toZipCode: z.string().max(10).optional(),
-    toAddress1: z.string().min(1).max(300),
-    toAddress2: z.string().max(300).optional(),
-    toContactName: z.string().max(100).optional(),
-    toContactTel: z.string().max(30).optional(),
+  // 하차지
+  toLocationId: idSchema.optional(),
+  toLocationName: z.string().min(1).max(200),
+  toZipCode: z.string().max(10).optional(),
+  toAddress1: z.string().min(1).max(300),
+  toAddress2: z.string().max(300).optional(),
+  toContactName: z.string().max(100).optional(),
+  toContactTel: z.string().max(30).optional(),
 
-    // 일정
-    pickupDate: dateSchema.optional(),
-    pickupTimeFrom: timeSchema.optional(),
-    pickupTimeTo: timeSchema.optional(),
-    deliveryDate: dateSchema.optional(),
-    deliveryTimeFrom: timeSchema.optional(),
-    deliveryTimeTo: timeSchema.optional(),
-    isTimeCritical: z.boolean().default(false),
+  // 일정
+  pickupDate: dateSchema.optional(),
+  pickupTimeFrom: timeSchema.optional(),
+  pickupTimeTo: timeSchema.optional(),
+  deliveryDate: dateSchema.optional(),
+  deliveryTimeFrom: timeSchema.optional(),
+  deliveryTimeTo: timeSchema.optional(),
+  isTimeCritical: z.boolean().default(false),
 
-    // 요구 조건
-    requiredVehicleTypeId: idSchema.optional(),
-    requiredTon: z.number().positive().optional(),
-    temperatureZone: temperatureZoneSchema.default('AMBIENT'),
-    isHazardous: z.boolean().default(false),
-    isExclusive: z.boolean().default(false),
+  // 요구 조건
+  requiredVehicleTypeId: idSchema.optional(),
+  requiredTon: z.number().positive().optional(),
+  temperatureZone: temperatureZoneSchema.default('AMBIENT'),
+  isHazardous: z.boolean().default(false),
+  isExclusive: z.boolean().default(false),
 
-    freightTerms: freightTermsSchema.default('CREDIT'),
-    priority: orderPrioritySchema.default('NORMAL'),
+  freightTerms: freightTermsSchema.default('CREDIT'),
+  priority: orderPrioritySchema.default('NORMAL'),
 
-    referenceNo1: z.string().max(50).optional(),
-    specialInstruction: z.string().max(1000).optional(),
-    remark: z.string().max(1000).optional(),
+  referenceNo1: z.string().max(50).optional(),
+  specialInstruction: z.string().max(1000).optional(),
+  remark: z.string().max(1000).optional(),
 
-    items: z.array(orderItemInputSchema).min(1, '품목을 1건 이상 입력하세요'),
-  })
+  items: z.array(orderItemInputSchema).min(1, '품목을 1건 이상 입력하세요'),
+});
+
+export const createOrderSchema = orderBaseSchema
   .refine(
     (v) =>
       !v.pickupDate ||
@@ -112,10 +115,7 @@ export const createOrderSchema = z
     { message: '상차 종료시각이 시작시각보다 빠릅니다', path: ['pickupTimeTo'] },
   );
 
-export const updateOrderSchema = createOrderSchema
-  .innerType()
-  .partial()
-  .omit({ items: true });
+export const updateOrderSchema = orderBaseSchema.omit({ items: true }).partial();
 
 export const orderListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),

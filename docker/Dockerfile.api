@@ -2,49 +2,60 @@
 # NTMS API (Nest.js) — 멀티스테이지 빌드
 #   빌드 컨텍스트는 저장소 루트다.
 #   docker compose -f docker/docker-compose.yml build api
+#
+# 스테이지마다 pnpm 링커를 다르게 쓴다.
+#   builder  : hoisted — Prisma Client 생성 위치가 node_modules/.prisma 로
+#              고정된다. 기본 레이아웃에서는 .pnpm/@prisma+client@<해시>/ 아래라
+#              COPY 대상 경로를 적을 수 없다.
+#   prod-deps: 기본(isolated) — hoisted 는 --filter 를 무시해서 api 와 무관한
+#              web 의존성(next 등 500MB)까지 딸려온다.
+#
+# pnpm deploy 는 쓰지 않는다. pnpm 10.0.0 은 inject-workspace-packages=true
+# 없이는 거부하고, --legacy 플래그도 이 버전에서는 먹지 않는다.
 # =====================================================================
 
 # ---------------------------------------------------------------------
-# 1) 의존성 설치 (레이어 캐시 극대화)
+# 0) 공통 베이스 — 매니페스트만 복사한다.
+#    소스가 바뀌어도 의존성 레이어는 재사용된다.
 # ---------------------------------------------------------------------
-FROM node:24-alpine AS deps
+FROM node:24-alpine AS base
 WORKDIR /app
 
 RUN corepack enable && corepack prepare pnpm@10.0.0 --activate
 
-# 매니페스트만 먼저 복사한다. 소스가 바뀌어도 의존성 레이어는 재사용된다.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json          apps/api/
 COPY packages/db/package.json       packages/db/
 COPY packages/shared/package.json   packages/shared/
 
+# ---------------------------------------------------------------------
+# 1) 운영 의존성 — 런타임 이미지로 그대로 옮긴다
+# ---------------------------------------------------------------------
+FROM base AS prod-deps
+
+# 여기서는 pnpm 기본(isolated) 링커를 쓴다. --node-linker=hoisted 는 --filter 를
+# 무시하고 락파일에 있는 모든 패키지를 평탄화해 넣어 web 의존성(next 등)까지
+# 딸려온다. isolated 는 필터가 그대로 먹어 api 의존 그래프만 남는다.
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     pnpm config set store-dir /pnpm/store && \
-    pnpm install --frozen-lockfile
+    pnpm install --frozen-lockfile --prod --filter "@ntms/api..."
 
 # ---------------------------------------------------------------------
-# 2) 빌드
+# 2) 전체 의존성 + 빌드
 # ---------------------------------------------------------------------
-FROM node:24-alpine AS builder
-WORKDIR /app
+FROM base AS builder
 
-RUN corepack enable && corepack prepare pnpm@10.0.0 --activate
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm config set store-dir /pnpm/store && \
+    pnpm install --frozen-lockfile --node-linker=hoisted
 
-COPY --from=deps /app/node_modules                    ./node_modules
-COPY --from=deps /app/apps/api/node_modules           ./apps/api/node_modules
-COPY --from=deps /app/packages/db/node_modules        ./packages/db/node_modules
-COPY --from=deps /app/packages/shared/node_modules    ./packages/shared/node_modules
 COPY . .
 
-# Prisma Client 생성 → 공용 패키지 → API 순서로 빌드
-RUN pnpm --filter @ntms/db exec prisma generate \
- && pnpm --filter @ntms/shared build \
+# @ntms/db 의 build 스크립트가 prisma generate 를 먼저 수행한다.
+# 생성물은 node_modules/.prisma 에 놓인다.
+RUN pnpm --filter @ntms/shared build \
  && pnpm --filter @ntms/db build \
  && pnpm --filter @ntms/api build
-
-# 운영 의존성만 남긴다
-RUN pnpm --filter @ntms/api --prod deploy /out \
- && cp -r packages/db/node_modules/.prisma /out/node_modules/.prisma 2>/dev/null || true
 
 # ---------------------------------------------------------------------
 # 3) 런타임
@@ -59,11 +70,41 @@ RUN apk add --no-cache tzdata dumb-init \
  && addgroup -g 1001 -S nodejs \
  && adduser  -u 1001 -S nestjs -G nodejs
 
-COPY --from=builder --chown=nestjs:nodejs /out ./
+# pnpm isolated 레이아웃은 실체를 node_modules/.pnpm 에 두고 패키지별
+# node_modules 에서 상대 심링크로 잇는다. 네 디렉터리를 같이 옮겨야 링크가
+# 끊기지 않는다. 특히 @ntms/* 링크는 루트가 아니라 의존하는 쪽에 걸린다.
+COPY --from=prod-deps --chown=nestjs:nodejs /app/node_modules                  ./node_modules
+COPY --from=prod-deps --chown=nestjs:nodejs /app/apps/api/node_modules         ./apps/api/node_modules
+COPY --from=prod-deps --chown=nestjs:nodejs /app/packages/db/node_modules      ./packages/db/node_modules
+COPY --from=prod-deps --chown=nestjs:nodejs /app/packages/shared/node_modules  ./packages/shared/node_modules
+
+# Prisma Client 생성물은 prisma CLI(devDependency)가 만들기 때문에 운영 의존성
+# 설치본에는 없다. 빌더(hoisted)의 고정 경로 node_modules/.prisma 에서 가져온다.
+#
+# 두는 위치가 중요하다. 생성된 클라이언트는 @prisma/client/runtime 을 되짚어
+# require 하므로, @prisma/client 실체와 같은 node_modules 안에 있어야 한다.
+# isolated 레이아웃에서 그 위치는 .pnpm/@prisma+client@<해시>/node_modules 다.
+COPY --from=builder /app/node_modules/.prisma /tmp/dot-prisma
+RUN set -eu; \
+    target="$(echo node_modules/.pnpm/@prisma+client@*/node_modules)"; \
+    test -d "$target"; \
+    cp -a /tmp/dot-prisma "$target/.prisma"; \
+    rm -rf /tmp/dot-prisma; \
+    chown -R nestjs:nodejs "$target/.prisma"
+
+# 워크스페이스 링크(node_modules/@ntms/*)가 가리키는 실제 위치.
+# package.json 이 있어야 main 필드로 dist 진입점을 찾는다.
+COPY --from=builder --chown=nestjs:nodejs /app/package.json               ./package.json
+COPY --from=builder --chown=nestjs:nodejs /app/packages/shared/package.json ./packages/shared/package.json
+COPY --from=builder --chown=nestjs:nodejs /app/packages/shared/dist        ./packages/shared/dist
+COPY --from=builder --chown=nestjs:nodejs /app/packages/db/package.json    ./packages/db/package.json
+COPY --from=builder --chown=nestjs:nodejs /app/packages/db/dist            ./packages/db/dist
+COPY --from=builder --chown=nestjs:nodejs /app/apps/api/package.json       ./apps/api/package.json
+COPY --from=builder --chown=nestjs:nodejs /app/apps/api/dist               ./apps/api/dist
 
 USER nestjs
 EXPOSE 4000
 
 # PID 1 신호 처리 — SIGTERM 이 Node 까지 전달되어야 graceful shutdown 이 된다
 ENTRYPOINT ["dumb-init", "--"]
-CMD ["node", "dist/main.js"]
+CMD ["node", "apps/api/dist/main.js"]

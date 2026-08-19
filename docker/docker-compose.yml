@@ -30,11 +30,18 @@ services:
       TZ: Asia/Seoul
       PGTZ: Asia/Seoul
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      # PostgreSQL 18 이미지는 PGDATA 가 /var/lib/postgresql/18/docker 다.
+      # /var/lib/postgresql/data 에 마운트하면 엔트리포인트가 구버전 배치로
+      # 판단해 기동을 거부한다. 볼륨은 반드시 한 단계 위에 건다.
+      - postgres-data:/var/lib/postgresql
       # 최초 기동 시 DDL 자동 적용 (파일명 사전순 실행).
       # 93_app_role.sh 가 같은 디렉터리에 있어 92_rls.sql 직후 실행된다.
-      - ../db/ddl:/docker-entrypoint-initdb.d:ro
-      - ../db/backup:/backup
+      #
+      # 바인드 마운트의 :z 는 SELinux 재라벨링이다. 서버(Rocky 8)는 SELinux 가
+      # enforcing 이라 이게 없으면 컨테이너가 호스트 파일을 읽지 못해 DDL 이
+      # 통째로 건너뛰어진다. SELinux 가 없는 환경(Docker Desktop)에서는 무시된다.
+      - ../db/ddl:/docker-entrypoint-initdb.d:ro,z
+      - ../db/backup:/backup:z
     command:
       # 16GB / vCPU 2 기준 튜닝
       - postgres
@@ -94,10 +101,15 @@ services:
       - noeviction          # 큐 데이터 유실 방지. 캐시 전용이면 allkeys-lru
       - --appendonly
       - "yes"
+    environment:
+      # 헬스체크의 redis-cli 가 읽는다. redis-cli 는 REDISCLI_AUTH 를 자동으로
+      # 쓰므로 -a 로 넘길 필요가 없다. -a 는 컨테이너 프로세스 목록에
+      # 비밀번호를 그대로 노출한다.
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a $${REDIS_PASSWORD} ping | grep PONG"]
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -194,8 +206,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro,z
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro,z
       - certbot-www:/var/www/certbot:ro
       - certbot-conf:/etc/letsencrypt:ro
       - nginx-logs:/var/log/nginx

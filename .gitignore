@@ -120,3 +120,12 @@ target/
 *.bak
 *.orig
 *.rej
+
+## ==== TypeScript / Next.js / Turborepo ====
+*.tsbuildinfo
+.next/
+.turbo/
+next-env.d.ts
+
+## ==== DB 백업 (컨테이너가 /backup 으로 마운트) ====
+db/backup/
