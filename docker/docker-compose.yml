@@ -153,6 +153,8 @@ services:
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET 를 .env 에 설정하세요}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET 를 .env 에 설정하세요}
       CORS_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost}
+      # HTTPS 를 붙이기 전까지는 .env 에서 false 로 내려야 세션이 유지된다
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
     depends_on:
       postgres:
         condition: service_healthy
