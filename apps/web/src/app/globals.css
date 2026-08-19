@@ -2,16 +2,328 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: light dark;
+/* =====================================================================
+   NTMS 디자인 토큰
+   ---------------------------------------------------------------------
+   3계층으로 나눈다.
+
+     1) 원시(primitive)  : --c-ink-850 처럼 색 자체의 이름. 화면에서 직접
+                           쓰지 않는다. 팔레트를 갈아끼우는 지점이다.
+     2) 의미(semantic)   : --surface-card, --text-primary 처럼 역할의 이름.
+                           컴포넌트는 여기만 본다. 라이트/다크가 갈리는 곳도
+                           여기 한 곳뿐이다.
+     3) 컴포넌트         : --control-h-md 처럼 특정 부품의 치수.
+
+   컴포넌트가 원시 토큰을 직접 참조하기 시작하면 다크모드가 그 자리에서
+   깨진다. 새 색이 필요하면 의미 토큰을 먼저 만들 것.
+
+   색은 "R G B" 세 숫자로 둔다. Tailwind 가 rgb(var(--x) / <alpha-value>)
+   형태로 읽어 bg-surface-card/60 같은 투명도 조합을 쓸 수 있게 하기 위해서다.
+   ===================================================================== */
+
+@layer base {
+  :root {
+    /* --- 1. 원시 : 잉크 (관제 화면의 브랜드 표면) ------------------- */
+    --c-ink-950: 7 14 18;
+    --c-ink-900: 11 22 27;
+    --c-ink-850: 15 30 37;
+    --c-ink-800: 20 39 47;
+    --c-ink-700: 28 55 66;
+    --c-ink-600: 39 80 94;
+    --c-ink-500: 61 110 126;
+    --c-ink-400: 104 146 159;
+    --c-ink-300: 155 185 195;
+    --c-ink-200: 198 216 222;
+    --c-ink-100: 227 237 240;
+    --c-ink-50: 241 246 248;
+
+    /* --- 1. 원시 : 종이 (업무 화면의 바탕) -------------------------- */
+    --c-paper-0: 255 255 255;
+    --c-paper-50: 246 248 249;
+    --c-paper-100: 237 241 243;
+    --c-paper-200: 224 231 234;
+    --c-paper-300: 201 213 218;
+
+    /* --- 1. 원시 : 옥색 (유일한 유채색 강조) ------------------------
+       살아 있는 것에만 쓴다 — 포커스, 진행 중인 운행, 현재 위치.
+       버튼을 칠하는 데 쓰지 않는다. 그러면 강조가 아니라 배경이 된다. */
+    --c-jade-800: 4 68 61;
+    --c-jade-700: 6 107 96;
+    --c-jade-600: 8 137 123;
+    --c-jade-500: 15 166 148;
+    --c-jade-400: 47 196 176;
+    --c-jade-300: 99 215 198;
+
+    /* --- 1. 원시 : 상태색 -------------------------------------------- */
+    --c-amber-700: 149 97 13;
+    --c-amber-600: 181 120 15;
+    --c-amber-500: 216 154 34;
+    --c-amber-300: 242 197 114;
+    --c-red-700: 155 47 39;
+    --c-red-600: 190 63 53;
+    --c-red-300: 240 167 159;
+
+    /* --- 2. 의미 : 라이트 ------------------------------------------- */
+    --surface-page: var(--c-paper-50);
+    --surface-card: var(--c-paper-0);
+    --surface-sunken: var(--c-paper-100);
+    --surface-field: var(--c-paper-0);
+
+    --border-subtle: var(--c-paper-200);
+    --border-strong: var(--c-paper-300);
+    --border-field: var(--c-paper-300);
+
+    --text-primary: 10 23 29;
+    --text-secondary: 66 86 94;
+    --text-tertiary: 95 117 126;
+    --text-inverse: var(--c-ink-50);
+    --text-accent: var(--c-jade-700);
+
+    --accent: var(--c-jade-600);
+    --accent-quiet: var(--c-jade-700);
+    --focus-ring: var(--c-jade-600);
+
+    --status-warning: var(--c-amber-700);
+    --status-danger: var(--c-red-700);
+    --status-success: var(--c-jade-700);
+    --status-warning-surface: 253 247 235;
+    --status-danger-surface: 253 242 241;
+    --status-success-surface: 236 249 247;
+
+    /* 주요 동작은 표면과 가장 멀리 있는 색으로 칠한다.
+       브랜드색을 버튼에 쓰지 않는 이유는 강조를 한 곳에만 두기 위해서다. */
+    --action-primary: var(--c-ink-900);
+    --action-primary-hover: var(--c-ink-800);
+    --action-primary-active: var(--c-ink-950);
+    --action-primary-text: var(--c-ink-50);
+
+    /* --- 3. 컴포넌트 ------------------------------------------------ */
+    --control-h-sm: 2rem;
+    --control-h-md: 2.5rem;
+    --control-h-lg: 3rem;
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 10px;
+    --radius-card: 14px;
+
+    --dur-fast: 120ms;
+    --dur-base: 200ms;
+    --dur-slow: 320ms;
+    --ease-out: cubic-bezier(0.22, 0.8, 0.28, 1);
+    --ease-in: cubic-bezier(0.5, 0, 0.9, 0.6);
+
+    color-scheme: light;
+  }
+
+  /* 시스템 설정이 다크일 때. data-theme="light" 로 명시하면 적용하지 않는다 */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+      --surface-page: var(--c-ink-900);
+      --surface-card: var(--c-ink-850);
+      --surface-sunken: var(--c-ink-800);
+      --surface-field: var(--c-ink-800);
+
+      --border-subtle: var(--c-ink-700);
+      --border-strong: var(--c-ink-600);
+      --border-field: var(--c-ink-600);
+
+      --text-primary: var(--c-ink-50);
+      --text-secondary: var(--c-ink-300);
+      --text-tertiary: var(--c-ink-400);
+      --text-inverse: var(--c-ink-950);
+      --text-accent: var(--c-jade-300);
+
+      --accent: var(--c-jade-400);
+      --accent-quiet: var(--c-jade-300);
+      --focus-ring: var(--c-jade-400);
+
+      --status-warning: var(--c-amber-300);
+      --status-danger: var(--c-red-300);
+      --status-success: var(--c-jade-300);
+      --status-warning-surface: 41 32 15;
+      --status-danger-surface: 45 25 23;
+      --status-success-surface: 8 40 37;
+
+      /* 어두운 표면에서 가장 먼 색은 흰색이다. 규칙은 라이트와 같다 */
+      --action-primary: var(--c-paper-0);
+      --action-primary-hover: var(--c-ink-100);
+      --action-primary-active: var(--c-ink-200);
+      --action-primary-text: var(--c-ink-950);
+
+      color-scheme: dark;
+    }
+  }
+
+  /* 사용자가 직접 고른 다크 */
+  :root[data-theme='dark'] {
+    --surface-page: var(--c-ink-900);
+    --surface-card: var(--c-ink-850);
+    --surface-sunken: var(--c-ink-800);
+    --surface-field: var(--c-ink-800);
+
+    --border-subtle: var(--c-ink-700);
+    --border-strong: var(--c-ink-600);
+    --border-field: var(--c-ink-600);
+
+    --text-primary: var(--c-ink-50);
+    --text-secondary: var(--c-ink-300);
+    --text-tertiary: var(--c-ink-400);
+    --text-inverse: var(--c-ink-950);
+    --text-accent: var(--c-jade-300);
+
+    --accent: var(--c-jade-400);
+    --accent-quiet: var(--c-jade-300);
+    --focus-ring: var(--c-jade-400);
+
+    --status-warning: var(--c-amber-300);
+    --status-danger: var(--c-red-300);
+    --status-success: var(--c-jade-300);
+    --status-warning-surface: 41 32 15;
+    --status-danger-surface: 45 25 23;
+    --status-success-surface: 8 40 37;
+
+    --action-primary: var(--c-paper-0);
+    --action-primary-hover: var(--c-ink-100);
+    --action-primary-active: var(--c-ink-200);
+    --action-primary-text: var(--c-ink-950);
+
+    color-scheme: dark;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: rgb(var(--surface-page));
+    color: rgb(var(--text-primary));
+    font-family: var(--font-sans), 'Pretendard', -apple-system, 'Segoe UI',
+      'Malgun Gothic', sans-serif;
+    font-size: 0.9375rem;
+    line-height: 1.6;
+    /* 한글은 단어 중간에서 끊기면 읽기가 나빠진다 */
+    word-break: keep-all;
+    overflow-wrap: break-word;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* 키보드로 이동할 때만 링이 보이게 한다. 마우스 클릭에는 나타나지 않는다 */
+  :focus-visible {
+    outline: none;
+    /* 반경은 건드리지 않는다. box-shadow 는 요소 자신의 모서리를 따라가므로,
+       여기서 radius 를 강제하면 포커스가 갈 때마다 버튼 모양이 바뀐다. */
+    box-shadow:
+      0 0 0 2px rgb(var(--surface-card)),
+      0 0 0 4px rgb(var(--focus-ring));
+  }
+
+  ::selection {
+    background-color: rgb(var(--c-jade-500) / 0.24);
+  }
 }
 
-body {
-  font-family:
-    'Pretendard',
-    -apple-system,
-    'Segoe UI',
-    'Malgun Gothic',
-    sans-serif;
-  word-break: keep-all;
+@layer components {
+  /* 계기판 라벨. 대문자 · 넓은 자간 · 고정폭 —
+     본문과 성격을 완전히 갈라 두어야 "설명" 이 아니라 "눈금" 으로 읽힌다.
+
+     **라틴 문자와 숫자 전용이다.** 넓은 자간과 대문자 변환은 알파벳을
+     전제로 한 장치라, 한글에 걸면 "통 합 연 계" 처럼 낱글자가 흩어진다.
+     한글 마이크로 라벨은 아래 .eyebrow-ko 를 쓴다. */
+  .eyebrow {
+    font-family: var(--font-mono), ui-monospace, monospace;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    line-height: 1.4;
+  }
+
+  /* 한글 마이크로 라벨. 같은 자리에 쓰이지만 자간을 벌리지 않고,
+     11px 에서 획이 뭉개지므로 한 단계 크게 잡는다 */
+  .eyebrow-ko {
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    line-height: 1.4;
+  }
+
+  /* 숫자 · 시각 · 코드. 자릿수가 흔들리지 않아야 표에서 줄이 맞는다 */
+  .tabular {
+    font-family: var(--font-mono), ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+  }
+
+  /* 모바일에서 입력 글자가 16px 보다 작으면 iOS 가 화면을 확대한다 */
+  .field-text {
+    font-size: 1rem;
+  }
+  @media (min-width: 768px) {
+    .field-text {
+      font-size: 0.9375rem;
+    }
+  }
+}
+
+/* =====================================================================
+   진입 연출
+   화면이 열리는 순서를 눈으로 따라갈 수 있게 한다. 장식이 아니라
+   "무엇부터 보면 되는지" 를 알려주는 안내다.
+   ===================================================================== */
+@keyframes ntms-rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes ntms-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes ntms-fade {
+  to {
+    opacity: 1;
+  }
+}
+
+/* 축 아래로 쌓인 막대가 자라 내려온다. 세로로만 늘려야 굵기가 변하지 않는다 */
+@keyframes ntms-grow {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+.animate-rise {
+  opacity: 0;
+  animation: ntms-rise var(--dur-slow) var(--ease-out) forwards;
+}
+
+/* 움직임을 줄여 달라고 한 사용자에게는 결과 상태만 보여준다.
+   내용을 감추는 것이 아니라, 도착 지점에서 시작하게 하는 것이다. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    /* delay 를 함께 지우지 않으면 2초 뒤에 툭 나타나는 동작이 그대로 남는다 */
+    animation-delay: 0ms !important;
+    transition-delay: 0ms !important;
+  }
+
+  .animate-rise {
+    opacity: 1;
+    transform: none;
+  }
 }

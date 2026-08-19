@@ -129,3 +129,6 @@ next-env.d.ts
 
 ## ==== DB 백업 (컨테이너가 /backup 으로 마운트) ====
 db/backup/
+
+# 세션 중 만든 화면 캡처. 금방 낡고 저장소만 무거워진다
+docs/screenshots/
