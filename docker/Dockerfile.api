@@ -84,11 +84,19 @@ COPY --from=prod-deps --chown=nestjs:nodejs /app/packages/shared/node_modules  .
 # 두는 위치가 중요하다. 생성된 클라이언트는 @prisma/client/runtime 을 되짚어
 # require 하므로, @prisma/client 실체와 같은 node_modules 안에 있어야 한다.
 # isolated 레이아웃에서 그 위치는 .pnpm/@prisma+client@<해시>/node_modules 다.
+#
+# 복사 전에 기존 .prisma 를 지우는 것이 중요하다. 의존성 설치 과정에서
+# @prisma/client 가 같은 자리에 스텁을 만들어 두는데, 디렉터리가 이미
+# 있으면 cp -a 는 그 안으로 중첩 복사(.prisma/dot-prisma)해 버린다.
+# 그러면 런타임에 스텁이 로드되어 "did not initialize yet" 으로 죽는다.
+# schema.prisma 존재 여부로 실제 생성물인지 빌드 시점에 검증한다.
 COPY --from=builder /app/node_modules/.prisma /tmp/dot-prisma
 RUN set -eu; \
     target="$(echo node_modules/.pnpm/@prisma+client@*/node_modules)"; \
     test -d "$target"; \
+    rm -rf "$target/.prisma"; \
     cp -a /tmp/dot-prisma "$target/.prisma"; \
+    test -f "$target/.prisma/client/schema.prisma"; \
     rm -rf /tmp/dot-prisma; \
     chown -R nestjs:nodejs "$target/.prisma"
 
