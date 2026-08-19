@@ -47,6 +47,83 @@ psql -U postgres -h localhost -d ntms -v ON_ERROR_STOP=1 -f db/run_all.sql
 | `92_rls.sql` | 행 수준 보안 정책 |
 | `93_app_role.sh` | Docker 전용. `ntms_app` / `ntms_admin` 에 로그인 권한 부여 |
 
+`db/migration/` 은 위와 별개다. 이미 만들어진 DB 에 적용하는 변경분이며,
+아래 *스키마 변경* 장에서 설명한다.
+
+---
+
+## 스키마 변경 (마이그레이션)
+
+`db/ddl/` 은 **현재 스키마의 정본**이다. `db/migration/` 은 **이미 만들어진 DB 를
+그 정본 상태까지 따라오게 하는 변경분**이다. 둘 다 고쳐야 한다.
+
+```
+db/ddl/         현재 스키마 전체       → 새 DB 를 만들 때 실행된다
+db/migration/   NNNN_설명.sql 변경분   → 기존 DB 에 순서대로 적용된다
+```
+
+컨테이너의 `db/ddl` 자동 실행은 **볼륨이 비어 있을 때만** 일어난다. 데이터가
+생긴 뒤에는 DDL 파일을 아무리 고쳐도 서버 DB 에는 아무 일도 일어나지 않는다.
+에러도 나지 않고 조용히 무시된다. 그래서 마이그레이션이 필요하다.
+
+### 변경 절차
+
+1. `db/ddl/` 의 해당 파일을 고친다 (정본 갱신)
+2. `db/migration/` 에 같은 변경을 하는 파일을 추가한다
+
+   ```
+   db/migration/0001_add_order_urgency.sql
+   ```
+
+3. 로컬에서 적용하고 확인한다
+
+   ```bash
+   bash db/migrate.sh --dry-run     # 무엇이 실행될지 확인
+   bash db/migrate.sh               # 적용
+   ```
+
+4. 커밋 · 푸시 → 서버에서 `docker/deploy.sh` 가 애플리케이션 기동 **전에**
+   자동으로 적용한다
+
+`prisma db pull` 은 3번 이후에 돌린다.
+
+### 규칙
+
+| 규칙 | 이유 |
+|---|---|
+| 적용된 파일은 수정하지 않는다 | 체크섬이 어긋나면 실행이 중단된다. 고칠 것은 새 번호로 추가한다 |
+| 파일 안에서 `BEGIN`/`COMMIT` 을 쓰지 않는다 | 스크립트가 파일 하나를 트랜잭션 하나로 감싼다. 실패하면 통째로 되돌아간다 |
+| 트랜잭션 밖에서 실행해야 하면 `NNNN_설명.notx.sql` | `CREATE INDEX CONCURRENTLY`, 일부 `ALTER TYPE` 등 |
+| `db/ddl/` 을 같이 고친다 | 신규 DB 는 DDL 로만 만들어진다. 빠뜨리면 새 DB 에만 그 변경이 없다 |
+
+### 적용 이력
+
+`ntms.schema_migration` 에 파일명 · 체크섬 · 적용 시각이 남는다.
+
+```bash
+bash db/migrate.sh --status
+```
+
+이 시스템을 처음 도입한 DB 에서는 기존 마이그레이션 파일이 **기준선**으로
+기록된다(실행하지 않고 적용된 것으로 표시). `db/ddl` 로 만들어진 DB 에는 그
+내용이 이미 들어 있기 때문이다.
+
+### 되돌리기
+
+자동 롤백은 없다. 되돌리는 SQL 을 새 마이그레이션으로 추가한다.
+운영 데이터가 들어간 뒤에는 **적용 전에 백업**한다.
+
+```bash
+docker exec ntms-postgres pg_dump -U postgres -Fc ntms -f /backup/before-migration.dump
+```
+
+아직 데이터가 없는 단계에서는 볼륨을 지우고 DDL 로 다시 만드는 편이 빠르다.
+
+```bash
+docker compose -f docker/docker-compose.yml --env-file .env down -v
+bash docker/deploy.sh --no-pull
+```
+
 ---
 
 ## 설계 원칙
