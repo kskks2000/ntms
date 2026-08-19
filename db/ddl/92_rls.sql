@@ -73,6 +73,15 @@ DECLARE
     --   일반 정책(tenant_id = current_tenant_id())을 그대로 걸면
     --   NULL 비교가 UNKNOWN 이 되어 기록 자체가 거부된다.
     v_log   TEXT[] := ARRAY['audit_log','login_history','interface_log','batch_job_log'];
+    -- 공용 행 테이블 : tenant_id IS NULL 이 "전 테넌트 공용" 을 뜻하는 곳.
+    --   각 테이블 정의에 그렇게 적혀 있는데도 tenant_id = current_tenant_id()
+    --   만 걸면 NULL 비교가 UNKNOWN 이 되어 공용 행이 어느 테넌트에도 보이지
+    --   않는다. 로그인 직후 표준 역할·표준 메뉴를 못 읽는 사고가 여기서 난다.
+    --
+    --   NULL 허용 여부(attnotnull)로 자동 판별하지 않고 이름을 직접 나열한다.
+    --   자동 판별에 맡기면 로그 테이블의 파티션 자식들까지 읽기 조건이
+    --   느슨해진다 — 부모는 v_log 로 걸러지지만 자식 이름은 걸리지 않는다.
+    v_shared TEXT[] := ARRAY['code_group','code','role','menu','batch_job'];
 BEGIN
     FOR r IN
         SELECT c.relname AS table_name
@@ -92,14 +101,28 @@ BEGIN
         EXECUTE format('ALTER TABLE ntms.%I FORCE  ROW LEVEL SECURITY', r.table_name);
 
         EXECUTE format('DROP POLICY IF EXISTS p_%s_tenant ON ntms.%I', r.table_name, r.table_name);
-        EXECUTE format(
-            'CREATE POLICY p_%s_tenant ON ntms.%I
-                 FOR ALL
-                 TO ntms_app, ntms_readonly
-                 USING      (tenant_id = ntms.current_tenant_id())
-                 WITH CHECK (tenant_id = ntms.current_tenant_id())',
-            r.table_name, r.table_name
-        );
+
+        IF r.table_name = ANY(v_shared) THEN
+            -- 공용 행 : 읽기는 NULL 행까지 허용하고, 쓰기는 자기 테넌트 행으로 막는다.
+            -- 공용 행의 생성·수정은 ntms_admin(BYPASSRLS) 경로에서만 가능하다.
+            EXECUTE format(
+                'CREATE POLICY p_%s_tenant ON ntms.%I
+                     FOR ALL
+                     TO ntms_app, ntms_readonly
+                     USING      (tenant_id IS NULL OR tenant_id = ntms.current_tenant_id())
+                     WITH CHECK (tenant_id = ntms.current_tenant_id())',
+                r.table_name, r.table_name
+            );
+        ELSE
+            EXECUTE format(
+                'CREATE POLICY p_%s_tenant ON ntms.%I
+                     FOR ALL
+                     TO ntms_app, ntms_readonly
+                     USING      (tenant_id = ntms.current_tenant_id())
+                     WITH CHECK (tenant_id = ntms.current_tenant_id())',
+                r.table_name, r.table_name
+            );
+        END IF;
     END LOOP;
 END;
 $$;

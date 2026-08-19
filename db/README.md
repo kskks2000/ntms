@@ -46,6 +46,7 @@ psql -U postgres -h localhost -d ntms -v ON_ERROR_STOP=1 -f db/run_all.sql
 | `91_trigger.sql` | 공통 트리거 부착 |
 | `92_rls.sql` | 행 수준 보안 정책 |
 | `93_app_role.sh` | Docker 전용. `ntms_app` / `ntms_admin` 에 로그인 권한 부여 |
+| `94_auth.sql` | 인증 전용 함수 (`fn_auth_resolve_tenant`) |
 
 `db/migration/` 은 위와 별개다. 이미 만들어진 DB 에 적용하는 변경분이며,
 아래 *스키마 변경* 장에서 설명한다.
@@ -316,6 +317,42 @@ export async function withTenant<T>(
 
 애플리케이션은 `ntms_app` 역할로 접속한다. 이 역할은 RLS 적용 대상이며
 `BYPASSRLS` 권한이 없다. 마이그레이션만 `ntms_admin` 을 쓴다.
+
+### 인증 단계의 예외 (`94_auth.sql`)
+
+로그인은 **테넌트를 아직 모르는 상태**에서 시작한다. 그런데 `tenant` 에도 RLS 가
+걸려 있어 `app.tenant_id` 없이는 한 행도 보이지 않는다 — 회사코드로 테넌트를
+찾는 것 자체가 불가능하다.
+
+이 한 지점만 `SECURITY DEFINER` 함수로 뚫는다.
+
+```sql
+SELECT * FROM ntms.fn_auth_resolve_tenant('NTMS');
+```
+
+애플리케이션에 `ntms_admin`(BYPASSRLS) 커넥션을 하나 더 주는 방식보다 노출면이
+훨씬 좁다. 뚫리는 것은 `tenant` 의 지정된 몇 개 컬럼뿐이고, 그것도 회사코드가
+정확히 일치하는 한 행뿐이다.
+
+테넌트를 알아낸 다음부터는 `app.tenant_id` 만 주입한 일반 트랜잭션
+(`withTenantBootstrap`)으로 계정을 조회한다. 이 구간에도 테넌트 격리는 그대로 걸려 있다.
+
+### 공용 행 (`tenant_id IS NULL`)
+
+`code_group` · `code` · `role` · `menu` · `batch_job` 은 `tenant_id` 가 NULL 이면
+전 테넌트 공용이다. RLS 정책이 `tenant_id = current_tenant_id()` 하나뿐이면
+NULL 비교가 UNKNOWN 이 되어 **공용 행이 어느 테넌트에도 보이지 않는다.**
+로그인 직후 표준 역할·표준 메뉴를 못 읽는 형태로 드러난다.
+
+그래서 이 다섯 테이블만 읽기 조건을 넓혔다(`0001_rls_shared_rows.sql`).
+
+```sql
+USING      (tenant_id IS NULL OR tenant_id = ntms.current_tenant_id())
+WITH CHECK (tenant_id = ntms.current_tenant_id())
+```
+
+쓰기는 그대로 자기 테넌트 행으로 제한되므로, 공용 행의 생성·수정은
+`ntms_admin` 경로(초기 데이터 적재 스크립트)에서만 가능하다.
 
 ---
 

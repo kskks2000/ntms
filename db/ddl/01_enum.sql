@@ -21,6 +21,7 @@ CREATE TYPE ntms.tenant_status AS ENUM (
 );
 
 CREATE TYPE ntms.user_status AS ENUM (
+    'PENDING',      -- 승인 대기 (계정 신청 접수, 로그인 불가)
     'ACTIVE',       -- 정상
     'LOCKED',       -- 잠김 (로그인 실패 초과)
     'DORMANT',      -- 휴면 (장기 미접속)
@@ -40,6 +41,7 @@ CREATE TYPE ntms.login_result AS ENUM (
     'SUCCESS',
     'FAIL_PASSWORD',    -- 비밀번호 불일치
     'FAIL_NOT_FOUND',   -- 미존재 계정
+    'FAIL_PENDING',     -- 승인 대기 계정 (신청은 됐으나 아직 승인 전)
     'FAIL_LOCKED',      -- 잠김 계정
     'FAIL_DORMANT',     -- 휴면 계정
     'FAIL_EXPIRED',     -- 비밀번호 만료

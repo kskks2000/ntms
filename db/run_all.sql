@@ -64,6 +64,9 @@
 \echo '=== 92_rls : 행 수준 보안 ==='
 \i db/ddl/92_rls.sql
 
+\echo '=== 94_auth : 인증 전용 함수 ==='
+\i db/ddl/94_auth.sql
+
 \echo ''
 \echo '=== 생성 결과 ==='
 
