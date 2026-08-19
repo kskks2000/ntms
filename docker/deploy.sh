@@ -11,6 +11,10 @@
 # =====================================================================
 set -euo pipefail
 
+# git pull 이 이 스크립트 자신을 교체할 수 있다. 그때 새 내용으로 다시 실행하려면
+# 절대 경로를 미리 잡아둬야 한다.
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
 cd "$(dirname "$0")/.."
 COMPOSE="docker compose -f docker/docker-compose.yml --env-file .env"
 
@@ -52,7 +56,16 @@ if [ "${1:-}" = "--no-pull" ]; then
     say "2/6  소스 갱신 건너뜀 (--no-pull)"
 else
     say "2/6  소스 갱신"
+    before=$(sha256sum "$SELF" | cut -d' ' -f1)
     git pull --ff-only
+    after=$(sha256sum "$SELF" | cut -d' ' -f1)
+
+    # 실행 중인 셸은 교체 전 파일 내용을 계속 읽는다. 그대로 두면 이번 배포가
+    # 옛 절차로 돌아가고, 새로 추가된 단계(마이그레이션 등)가 조용히 건너뛰어진다.
+    if [ "$before" != "$after" ]; then
+        echo "  deploy.sh 가 갱신되었다 — 새 버전으로 다시 실행한다"
+        exec bash "$SELF" --no-pull
+    fi
 fi
 echo "  $(git log -1 --format='%h %s')"
 
