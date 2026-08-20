@@ -2,7 +2,9 @@ import { Injectable } from '@nestjs/common';
 import type { TxClient } from '@ntms/db';
 import {
   buildLoadProfile,
+  checkPrecedence,
   deriveStops,
+  stopKeyOf,
   type AllocateInput,
   type AllocationTripView,
   type Capacity,
@@ -199,6 +201,14 @@ export class PlanService {
       }
       if (view.orderCount === 0) {
         throw AppError.conflict('TRIP_EMPTY', '오더가 없는 트립은 확정할 수 없습니다.');
+      }
+      if (view.precedence.length > 0) {
+        const first = view.precedence[0]!;
+        throw AppError.conflict(
+          'TRIP_PRECEDENCE',
+          `${first.orderNo} 를 싣기 전에 내리는 순서입니다. 상차를 하차보다 앞으로 옮기세요.`,
+          { violations: view.precedence },
+        );
       }
 
       await tx.trip.update({
@@ -869,7 +879,7 @@ export class PlanService {
     if (stopOrder && stopOrder.length === stops.length) {
       // 사람이 정한 순서가 있으면 그대로 쓴다. 기본 순서는 예측 가능한
       // 출발점일 뿐이고, 실제 동선은 배차 담당자가 안다.
-      const byKey = new Map(stops.map((s) => [stopKey(s), s]));
+      const byKey = new Map(stops.map((s) => [stopKeyOf(s), s]));
       const reordered = stopOrder.map((k) => byKey.get(k)).filter(Boolean) as DerivedStop[];
       if (reordered.length === stops.length) {
         stops = reordered.map((s, i) => ({ ...s, stopSeq: i + 1 }));
@@ -928,12 +938,24 @@ export class PlanService {
     // 숫자를 말해야 나중에 실적과 견줄 수 있다.
     const cap = await this.capacityOf(tx, principal, trip_id);
     const profile = buildLoadProfile(stops, cap);
+
+    // 구간 거리 · 소요시간 · 작업시간을 모아 계획 시각을 세운다
+    const legs = await this.legsOf(tx, tenant_id, stops);
+    const schedule = buildSchedule(stops, legs, plannedStart(orders));
+
     for (const p of profile.points) {
+      const leg = legs[p.stopSeq - 1]!;
+      const sch = schedule.points[p.stopSeq - 1]!;
       await tx.trip_stop.updateMany({
         where: { tenant_id, trip_id, stop_seq: p.stopSeq },
         data: {
           cumulative_weight_kg: p.cumulativeWeightKg,
           cumulative_volume_cbm: p.cumulativeVolumeCbm,
+          distance_from_prev_km: leg.distanceKm,
+          duration_from_prev_min: leg.durationMin,
+          planned_service_min: leg.serviceMin,
+          planned_arrival_at: sch.arrival,
+          planned_departure_at: sch.departure,
         },
       });
     }
@@ -966,8 +988,91 @@ export class PlanService {
         end_location_id: stops[stops.length - 1]?.locationId
           ? BigInt(stops[stops.length - 1]!.locationId!)
           : null,
-        planned_start_at: plannedStart(orders),
+        // 거리도 같은 이유로 다 알 때만 낸다
+        planned_distance_km: legs.every((l) => l.known)
+          ? legs.reduce((a, l) => a + (l.distanceKm ?? 0), 0) || null
+          : null,
+        planned_duration_min: schedule.totalMinutes,
+        planned_toll_fee: legs.reduce((a, l) => a + (l.tollFee ?? 0), 0) || null,
+        planned_start_at: schedule.start,
+        planned_end_at: schedule.end,
       },
+    });
+  }
+
+  /**
+   * 정차 사이의 구간 정보를 모은다.
+   *
+   * 거리·소요시간은 라우트 마스터(distance_master)가 안다. 없으면 null 로
+   * 두고 **추정하지 않는다** — 직선거리로 어림잡으면 그럴듯한 숫자가 나와
+   * 사람이 그것을 사실로 믿는다. 모르는 것은 모른다고 두는 편이 낫다.
+   *
+   * 작업시간은 거점 마스터의 표준 상·하차 시간을 쓴다. 항만은 70분,
+   * 점포는 25분처럼 곳마다 다르고, 그 차이가 하루 동선을 가른다.
+   */
+  private async legsOf(
+    tx: TxClient,
+    tenant_id: bigint,
+    stops: DerivedStop[],
+  ): Promise<Leg[]> {
+    const locationIds = [
+      ...new Set(stops.map((s) => s.locationId).filter((v): v is string => v !== null)),
+    ].map(BigInt);
+
+    const [routes, locations] = await Promise.all([
+      locationIds.length > 0
+        ? tx.distance_master.findMany({
+            where: {
+              tenant_id,
+              is_active: true,
+              from_location_id: { in: locationIds },
+              to_location_id: { in: locationIds },
+            },
+            select: {
+              from_location_id: true,
+              to_location_id: true,
+              distance_km: true,
+              duration_minutes: true,
+              toll_fee: true,
+            },
+          })
+        : Promise.resolve([]),
+      locationIds.length > 0
+        ? tx.location.findMany({
+            where: { tenant_id, location_id: { in: locationIds } },
+            select: {
+              location_id: true,
+              standard_load_min: true,
+              standard_unload_min: true,
+            },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const routeBy = new Map(
+      routes.map((r) => [`${r.from_location_id}>${r.to_location_id}`, r]),
+    );
+    const locBy = new Map(locations.map((l) => [String(l.location_id), l]));
+
+    return stops.map((s, i) => {
+      const prev = i > 0 ? stops[i - 1]! : null;
+      const r =
+        prev && prev.locationId && s.locationId
+          ? routeBy.get(`${prev.locationId}>${s.locationId}`)
+          : undefined;
+      const loc = s.locationId ? locBy.get(s.locationId) : undefined;
+
+      return {
+        distanceKm: r ? num(r.distance_km) : null,
+        durationMin: r?.duration_minutes ?? null,
+        tollFee: r ? num(r.toll_fee) : null,
+        serviceMin:
+          s.stopType === 'PICKUP'
+            ? (loc?.standard_load_min ?? DEFAULT_SERVICE_MIN)
+            : (loc?.standard_unload_min ?? DEFAULT_SERVICE_MIN),
+        // 첫 정차는 앞 구간이 없다. 구간을 모르는 것과 구별한다.
+        known: i === 0 ? true : Boolean(r),
+      };
     });
   }
 
@@ -1000,7 +1105,11 @@ export class PlanService {
         vehicle_type: true,
         trip_stop: {
           orderBy: { stop_seq: 'asc' },
-          include: { trip_stop_order: { include: { transport_order: { select: { order_no: true } } } } },
+          include: {
+            // 좌표는 거점 마스터가 갖고 있다. 지도에 찍으려면 함께 내려야 한다.
+            location: { select: { latitude: true, longitude: true } },
+            trip_stop_order: { include: { transport_order: { select: { order_no: true } } } },
+          },
         },
         trip_order: {
           orderBy: { seq_no: 'asc' },
@@ -1054,18 +1163,42 @@ export class PlanService {
       totalPalletQty: num(t.total_pallet_qty) ?? 0,
       weightLoadingRate: num(t.weight_loading_rate),
       plannedDistanceKm: num(t.planned_distance_km),
-      stops: t.trip_stop.map((s, i) => ({
-        ...profile.points[i]!,
-        locationId: idOrNull(s.location_id),
-        address1: s.address1,
-        orders: s.trip_stop_order.map((so) => ({
-          orderId: String(so.order_id),
-          orderNo: so.transport_order?.order_no ?? '',
-          action: so.action_type as 'LOAD' | 'UNLOAD',
-        })),
-        timeWindowFrom: clockStr(s.time_window_from),
-        timeWindowTo: clockStr(s.time_window_to),
-      })),
+      plannedDurationMin: t.planned_duration_min,
+      plannedStartAt: t.planned_start_at?.toISOString() ?? null,
+      plannedEndAt: t.planned_end_at?.toISOString() ?? null,
+      lateStopCount: t.trip_stop.filter(
+        (s) => lateness(s.planned_arrival_at, s.time_window_to, t.plan_date) !== null,
+      ).length,
+      // 첫 정차는 앞 구간이 없으므로 세지 않는다
+      missingRouteCount: t.trip_stop.filter(
+        (s, i) => i > 0 && s.distance_from_prev_km === null,
+      ).length,
+      stops: t.trip_stop.map((s, i) => {
+        const arrival = s.planned_arrival_at;
+        const late = lateness(arrival, s.time_window_to, t.plan_date);
+        const wait = waiting(arrival, s.time_window_from, t.plan_date);
+        return {
+          ...profile.points[i]!,
+          locationId: idOrNull(s.location_id),
+          address1: s.address1,
+          latitude: num(s.latitude) ?? num(s.location?.latitude),
+          longitude: num(s.longitude) ?? num(s.location?.longitude),
+          orders: s.trip_stop_order.map((so) => ({
+            orderId: String(so.order_id),
+            orderNo: so.transport_order?.order_no ?? '',
+            action: so.action_type as 'LOAD' | 'UNLOAD',
+          })),
+          timeWindowFrom: clockStr(s.time_window_from),
+          timeWindowTo: clockStr(s.time_window_to),
+          distanceFromPrevKm: num(s.distance_from_prev_km),
+          durationFromPrevMin: s.duration_from_prev_min,
+          serviceMin: s.planned_service_min,
+          plannedArrivalAt: arrival?.toISOString() ?? null,
+          plannedDepartureAt: s.planned_departure_at?.toISOString() ?? null,
+          lateMinutes: late,
+          waitMinutes: wait,
+        };
+      }),
       orders: t.trip_order.map((o) => ({
         orderId: String(o.order_id),
         orderNo: o.transport_order?.order_no ?? '',
@@ -1080,6 +1213,16 @@ export class PlanService {
         firstOverSeq: profile.firstOverSeq,
         overBy: profile.overBy,
       },
+      precedence: checkPrecedence(
+        t.trip_stop.map((s) => ({
+          stopSeq: s.stop_seq,
+          orders: s.trip_stop_order.map((so) => ({
+            orderId: String(so.order_id),
+            orderNo: so.transport_order?.order_no ?? '',
+            action: so.action_type as 'LOAD' | 'UNLOAD',
+          })),
+        })),
+      ),
       remark: t.remark,
     };
   }
@@ -1156,9 +1299,137 @@ async function advanceOrders(
   }
 }
 
-/** 정차를 가리키는 키. 거점 id 가 없으면 이름으로 가른다 */
-function stopKey(s: { stopType: string; locationId: string | null; locationName: string }): string {
-  return `${s.stopType}:${s.locationId ?? `name:${s.locationName}`}`;
+/** 거점 마스터에 표준 작업시간이 없을 때 쓰는 값 */
+const DEFAULT_SERVICE_MIN = 30;
+
+interface Leg {
+  distanceKm: number | null;
+  durationMin: number | null;
+  tollFee: number | null;
+  serviceMin: number;
+  known: boolean;
+}
+
+/**
+ * 정차 순서를 따라가며 도착 · 출발 시각을 세운다.
+ *
+ * 규칙은 기사가 실제로 하는 대로다.
+ *
+ *   도착 = 앞 정차 출발 + 이동시간
+ *   창이 아직 안 열렸으면 열릴 때까지 기다린다
+ *   출발 = max(도착, 창 열림) + 작업시간
+ *
+ * 구간 소요시간을 모르면 그 뒤로는 시각을 세우지 않는다. 하나를 추정해
+ * 이어 붙이면 뒤쪽 시각이 전부 그럴듯하게 틀린다 — 틀린 걸 모르는 계획이
+ * 계획이 없는 것보다 나쁘다.
+ */
+function buildSchedule(
+  stops: DerivedStop[],
+  legs: Leg[],
+  start: Date | null,
+): {
+  points: { arrival: Date | null; departure: Date | null }[];
+  start: Date | null;
+  end: Date | null;
+  totalMinutes: number | null;
+} {
+  if (!start || stops.length === 0) {
+    return {
+      points: stops.map(() => ({ arrival: null, departure: null })),
+      start: null,
+      end: null,
+      totalMinutes: null,
+    };
+  }
+
+  const points: { arrival: Date | null; departure: Date | null }[] = [];
+  let cursor: Date | null = start;
+
+  for (const [i, stop] of stops.entries()) {
+    const leg = legs[i]!;
+
+    if (cursor === null || (i > 0 && !leg.known)) {
+      // 여기서부터는 모른다
+      points.push({ arrival: null, departure: null });
+      cursor = null;
+      continue;
+    }
+
+    /*
+      타입을 명시해 두는 이유 — cursor 는 루프 안에서 departure 로 다시
+      대입되고 departure 는 cursor 에서 나온다. 제어 흐름이 한 바퀴 돌아
+      추론이 순환하므로(TS7022) 고리를 여기서 끊는다. 지우면 오류가
+      되살아난다.
+    */
+    const from: Date = cursor;
+    const arrival: Date =
+      i === 0 ? from : new Date(from.getTime() + (leg.durationMin ?? 0) * 60_000);
+
+    // 창이 열리기 전에 도착하면 기다린다
+    const openAt = clockOn(arrival, stop.timeWindowFrom);
+    const serviceFrom: Date = openAt && openAt > arrival ? openAt : arrival;
+    const departure: Date = new Date(serviceFrom.getTime() + leg.serviceMin * 60_000);
+
+    points.push({ arrival, departure });
+    cursor = departure;
+  }
+
+  /*
+    구간을 하나라도 모르면 총 소요시간을 내지 않는다.
+
+    아는 데까지만 더하면 "362km / 70분" 같은 값이 나오는데, 그건 첫 정차의
+    작업시간일 뿐인데도 화면에서는 완결된 계획으로 읽힌다. **반쪽 계산을
+    완전한 것처럼 보이게 하는 것이 계산을 안 하는 것보다 나쁘다.**
+  */
+  const complete = points.every((p) => p.departure !== null);
+  const end = complete ? (points[points.length - 1]?.departure ?? null) : null;
+
+  return {
+    points,
+    start,
+    end,
+    totalMinutes: end ? Math.round((end.getTime() - start.getTime()) / 60_000) : null,
+  };
+}
+
+/** 어떤 날의 `HH:MM` 을 그 날짜 위의 시각으로 (KST 기준) */
+function clockOn(base: Date, hhmm: string | null): Date | null {
+  if (!hhmm) return null;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const y = base.getFullYear();
+  const m = pad(base.getMonth() + 1);
+  const d = pad(base.getDate());
+  return new Date(`${y}-${m}-${d}T${hhmm}:00+09:00`);
+}
+
+/** 시간창 마감을 몇 분 넘겼나. 안 넘겼으면 null */
+function lateness(
+  arrival: Date | null,
+  windowTo: Date | null,
+  planDate: Date | null,
+): number | null {
+  if (!arrival || !windowTo || !planDate) return null;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const close = new Date(
+    `${arrival.getFullYear()}-${pad(arrival.getMonth() + 1)}-${pad(arrival.getDate())}T${pad(windowTo.getUTCHours())}:${pad(windowTo.getUTCMinutes())}:00+09:00`,
+  );
+  const diff = Math.round((arrival.getTime() - close.getTime()) / 60_000);
+  return diff > 0 ? diff : null;
+}
+
+/** 창이 열릴 때까지 몇 분 기다리나 */
+function waiting(
+  arrival: Date | null,
+  windowFrom: Date | null,
+  planDate: Date | null,
+): number | null {
+  if (!arrival || !windowFrom || !planDate) return null;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const open = new Date(
+    `${arrival.getFullYear()}-${pad(arrival.getMonth() + 1)}-${pad(arrival.getDate())}T${pad(windowFrom.getUTCHours())}:${pad(windowFrom.getUTCMinutes())}:00+09:00`,
+  );
+  const diff = Math.round((open.getTime() - arrival.getTime()) / 60_000);
+  return diff > 0 ? diff : null;
 }
 
 function toOrderForTrip(o: Record<string, unknown>): OrderForTrip {

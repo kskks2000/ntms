@@ -174,6 +174,55 @@ export function overByLabel(overBy: string[]): string {
   return overBy.map((k) => OVER_LABEL[k] ?? k).join(' · ');
 }
 
+/**
+ * 실은 뒤에 내리는가.
+ *
+ * 순서를 손으로 바꿀 수 있게 되면서 생긴 문제다. 오더의 하차 정차가 상차
+ * 정차보다 앞서면 **아직 차에 없는 화물을 내리는** 순서가 된다.
+ *
+ * 적재 곡선만으로는 이걸 못 잡는다 — 없는 것을 빼면 음수가 되므로 0 으로
+ * 막는데, 그러면 곡선이 오히려 낮아져 "더 좋아진 순서" 처럼 보인다.
+ * 실제로 그 순서로 보내면 기사가 첫 하차지에서 빈 차로 서 있게 된다.
+ */
+export interface PrecedenceViolation {
+  orderId: string;
+  orderNo: string;
+  pickupSeq: number;
+  deliverySeq: number;
+}
+
+export function checkPrecedence(
+  stops: { stopSeq: number; orders: { orderId: string; orderNo: string; action: 'LOAD' | 'UNLOAD' }[] }[],
+): PrecedenceViolation[] {
+  const pickedAt = new Map<string, number>();
+  const out: PrecedenceViolation[] = [];
+
+  for (const s of stops) {
+    for (const o of s.orders) {
+      if (o.action === 'LOAD') {
+        // 같은 오더가 여러 곳에서 실릴 일은 없지만, 있다면 가장 이른 곳을 본다
+        if (!pickedAt.has(o.orderId)) pickedAt.set(o.orderId, s.stopSeq);
+      }
+    }
+  }
+
+  for (const s of stops) {
+    for (const o of s.orders) {
+      if (o.action !== 'UNLOAD') continue;
+      const at = pickedAt.get(o.orderId);
+      if (at === undefined || at > s.stopSeq) {
+        out.push({
+          orderId: o.orderId,
+          orderNo: o.orderNo,
+          pickupSeq: at ?? 0,
+          deliverySeq: s.stopSeq,
+        });
+      }
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------
 // 정차 순서 만들기
 // ---------------------------------------------------------------------
@@ -315,6 +364,21 @@ function round3(n: number): number {
   return Math.round(n * 1000) / 1000;
 }
 
+/**
+ * 정차를 가리키는 키.
+ *
+ * 화면이 순서를 바꿔 보낼 때와 서버가 그 순서를 되읽을 때 **같은 문자열**을
+ * 써야 한다. 양쪽에서 따로 만들면 거점 id 가 없는 정차(직접 입력한 주소)를
+ * 다루는 방식이 어긋나 순서가 조용히 무시된다.
+ */
+export function stopKeyOf(s: {
+  stopType: string;
+  locationId: string | null;
+  locationName: string;
+}): string {
+  return `${s.stopType}:${s.locationId ?? `name:${s.locationName}`}`;
+}
+
 // ---------------------------------------------------------------------
 // 편성 스키마
 // ---------------------------------------------------------------------
@@ -391,9 +455,30 @@ export interface PoolOrder extends OrderForTrip {
 export interface TripStopView extends LoadPoint {
   locationId: string | null;
   address1: string;
+  /** 거점 마스터의 좌표. 없으면 지도에 안 찍힌다 */
+  latitude: number | null;
+  longitude: number | null;
   orders: { orderId: string; orderNo: string; action: 'LOAD' | 'UNLOAD' }[];
   timeWindowFrom: string | null;
   timeWindowTo: string | null;
+
+  /** 앞 정차에서 여기까지 (라우트 마스터가 아는 값) */
+  distanceFromPrevKm: number | null;
+  durationFromPrevMin: number | null;
+  /** 이 정차에서 상·하차에 걸리는 시간 */
+  serviceMin: number | null;
+  /** 계획상 도착 · 출발 시각 (ISO) */
+  plannedArrivalAt: string | null;
+  plannedDepartureAt: string | null;
+  /**
+   * 시간창을 못 지키는 정차.
+   *
+   * 순서를 바꾸면 여기가 바뀐다 — 그게 순서를 손으로 고칠 수 있게 만든
+   * 이유다. 늦는 만큼(분)을 함께 준다.
+   */
+  lateMinutes: number | null;
+  /** 창이 열리기 전에 도착해 기다리는 시간(분) */
+  waitMinutes: number | null;
 }
 
 export interface TripView {
@@ -411,6 +496,13 @@ export interface TripView {
   totalPalletQty: number;
   weightLoadingRate: number | null;
   plannedDistanceKm: number | null;
+  plannedDurationMin: number | null;
+  plannedStartAt: string | null;
+  plannedEndAt: string | null;
+  /** 시간창을 못 지키는 정차 수. 0이면 이 순서로 갈 수 있다 */
+  lateStopCount: number;
+  /** 구간 거리를 모르는 곳이 있으면 계획 시각을 믿을 수 없다 */
+  missingRouteCount: number;
   stops: TripStopView[];
   orders: { orderId: string; orderNo: string; shipperName: string; weightKg: number }[];
   profile: {
@@ -419,6 +511,8 @@ export interface TripView {
     firstOverSeq: number | null;
     overBy: string[];
   };
+  /** 싣기 전에 내리는 순서. 비어 있어야 보낼 수 있다 */
+  precedence: PrecedenceViolation[];
   remark: string | null;
 }
 

@@ -10,6 +10,7 @@ import { DispatchModule } from './dispatch/dispatch.module.js';
 import { MasterModule } from './master/master.module.js';
 import { OrderModule } from './order/order.module.js';
 import { PlanModule } from './plan/plan.module.js';
+import { NaverModule } from './naver/naver.module.js';
 import { AllExceptionsFilter } from './common/all-exceptions.filter.js';
 
 @Module({
@@ -33,6 +34,7 @@ import { AllExceptionsFilter } from './common/all-exceptions.filter.js';
     MasterModule,
     OrderModule,
     PlanModule,
+    NaverModule,
     // 도메인 모듈은 Phase 1 부터 여기에 추가한다
     // MasterModule, OrderModule, PlanModule,
     // ExecutionModule, ActualModule, SettlementModule
