@@ -112,12 +112,21 @@ export function useMasterForm<TValues extends FieldValues>({
     },
   );
 
-  // 서랍이 열릴 때마다 칸을 다시 채운다. 이전에 열었던 행의 값이 남아 있으면
-  // 새로 등록하려던 사람이 남의 값을 저장하게 된다.
+  /*
+    서랍이 열릴 때마다 칸을 다시 채운다. 이전에 열었던 행의 값이 남아 있으면
+    새로 등록하려던 사람이 남의 값을 저장하게 된다.
+
+    **선택 목록이 도착한 뒤에 채운다.** <select> 는 목록에 없는 값을 담지
+    못한다 — 차종 목록이 아직 비어 있는데 vehicleTypeId 를 넣으면 브라우저가
+    조용히 빈 값으로 되돌리고, 목록이 나중에 도착해도 그대로 빈 채로 남는다.
+    수정 화면을 열었는데 차종·운송사가 "미지정" 으로 보이는 증상이 이것이다.
+  */
   const detailData = detail.data;
+  const optionsData = options.data;
   useEffect(() => {
     if (!open) return;
     setFormError(null);
+    if (!optionsData) return;
     if (!isEdit) {
       form.reset(blank);
       return;
@@ -126,7 +135,7 @@ export function useMasterForm<TValues extends FieldValues>({
     // form 과 blank 는 매 렌더 새 참조라 의존성에서 뺀다 — 넣으면 매번 다시 채워
     // 사용자가 친 값을 지운다
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, isEdit, detailData]);
+  }, [open, isEdit, detailData, optionsData]);
 
   const submit = form.handleSubmit(async (values) => {
     setFormError(null);
@@ -170,7 +179,7 @@ export function useMasterForm<TValues extends FieldValues>({
   return {
     form,
     options: options.data,
-    loading: isEdit && detail.isLoading,
+    loading: options.isLoading || (isEdit && detail.isLoading),
     submitting: save.isPending || form.formState.isSubmitting,
     deleting: del.isPending,
     formError,

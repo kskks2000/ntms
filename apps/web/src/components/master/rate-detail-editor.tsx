@@ -1,8 +1,8 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Copy, Plus, Trash2 } from 'lucide-react';
-import { useEffect, useMemo } from 'react';
+import { ChevronDown, ChevronRight, Copy, Plus, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { useFieldArray, useForm, type FieldErrors } from 'react-hook-form';
 import {
   RATE_METHOD_LABEL,
@@ -123,9 +123,33 @@ export function RateDetailEditor({ tariffId }: { tariffId: string }) {
   const { control, register, reset, handleSubmit, formState } = form;
   const { fields, append, remove, insert } = useFieldArray({ control, name: 'rows' });
 
+  /*
+    자주 쓰지 않는 칸은 접어 둔다.
+
+    상한 · 대기료 · 비고까지 열로 세우면 표가 가로로 넘쳐, 정작 매일 보는
+    기본료와 구간이 화면 밖으로 밀린다. 그렇다고 빼 버리면 DB 에는 있는데
+    화면으로는 넣을 수 없는 값이 된다.
+
+    그래서 줄을 펼쳐서 넣는다. useFieldArray 는 줄을 넣고 뺄 때 인덱스가
+    통째로 밀리므로, 펼침 상태는 인덱스가 아니라 RHF 가 주는 안정된 id 로
+    기억한다 — 그러지 않으면 2번 줄을 펼쳐 둔 채 1번 줄을 지웠을 때 엉뚱한
+    줄이 펼쳐진다.
+  */
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleRow = (rowId: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+
   const data = page.data;
+  const optionRows = options.data;
   useEffect(() => {
-    if (!data) return;
+    // 선택 목록이 오기 전에 채우면 <select> 가 담지 못한 값을 버린다.
+    // 그러면 권역·차종이 전부 "전 권역 / 전 차종" 으로 보인다.
+    if (!data || !optionRows) return;
     reset({
       rows: data.rows.map((r) => ({
         ...BLANK_ROW,
@@ -141,7 +165,7 @@ export function RateDetailEditor({ tariffId }: { tariffId: string }) {
         ),
       })) as RateDetailBulkInput['rows'],
     });
-  }, [data, reset]);
+  }, [data, optionRows, reset]);
 
   const save = useApiMutation<{ count: number }, RateDetailBulkInput>(
     () => ({ path: `/master/tariffs/${tariffId}/rates`, method: 'PUT' }),
@@ -189,15 +213,31 @@ export function RateDetailEditor({ tariffId }: { tariffId: string }) {
         if (raw !== '' && /^-?\d+(\.\d+)?$/.test(raw)) {
           const n = Number(raw);
           if (Number.isFinite(n)) {
-            form.setValue(name as never, n.toLocaleString('ko-KR') as never, {
-              shouldDirty: false,
-            });
+            const formatted = n.toLocaleString('ko-KR');
+            // 칸을 직접 고친다. setValue 만으로는 uncontrolled 입력의 DOM
+            // 값이 그대로 남아, 화면에는 안 끊긴 숫자가 보인다.
+            e.target.value = formatted;
+            form.setValue(name as never, formatted as never, { shouldDirty: false });
           }
         }
+        // RHF 가 이 시점의 값을 읽어 가도록 마지막에 부른다
         await field.onBlur(e);
       },
     };
   };
+
+  /**
+   * 접혀 있는 칸에 값이 들어 있는지.
+   *
+   * 표시가 없으면 "이 줄에는 대기료가 걸려 있다" 는 사실이 펼치기 전까지
+   * 보이지 않는다. 금액에 영향을 주는 값이 화면에 없는 채로 남는 셈이다.
+   */
+  const HIDDEN_KEYS = ['maxAmount', 'waitingFreeMin', 'waitingRateHour', 'remark'] as const;
+  const hasHidden = (i: number): boolean =>
+    HIDDEN_KEYS.some((k) => {
+      const v = form.getValues(`rows.${i}.${k}` as never) as unknown;
+      return v !== null && v !== undefined && String(v).trim() !== '';
+    });
 
   const errors = formState.errors as FieldErrors<RateDetailBulkInput>;
   const rowErrors = (i: number, key: string): string | undefined => {
@@ -205,7 +245,7 @@ export function RateDetailEditor({ tariffId }: { tariffId: string }) {
     return row?.[key]?.message;
   };
 
-  if (page.isLoading) {
+  if (page.isLoading || options.isLoading) {
     return <Panel><div className="px-4 py-16 text-center text-content-tertiary">불러오는 중…</div></Panel>;
   }
   if (!data) {
@@ -299,6 +339,9 @@ export function RateDetailEditor({ tariffId }: { tariffId: string }) {
           <table className="w-full border-collapse text-label">
             <thead>
               <tr className="border-b border-line-subtle text-caption text-content-tertiary">
+                <th scope="col" className="w-8 px-1 py-2">
+                  <span className="sr-only">자세히</span>
+                </th>
                 <th scope="col" className="w-10 px-2 py-2 text-left font-medium">
                   #
                 </th>
@@ -336,7 +379,29 @@ export function RateDetailEditor({ tariffId }: { tariffId: string }) {
             </thead>
             <tbody>
               {fields.map((field, i) => (
-                <tr key={field.id} className="border-b border-line-subtle last:border-0">
+                <FragmentRow key={field.id}>
+                <tr className="border-b border-line-subtle last:border-0">
+                  <td className="px-1 py-1.5">
+                    <IconButton
+                      label={`${i + 1}번째 줄 자세히 ${expanded.has(field.id) ? '접기' : '펼치기'}`}
+                      onClick={() => toggleRow(field.id)}
+                    >
+                      <span className="relative block">
+                        {expanded.has(field.id) ? (
+                          <ChevronDown size={14} strokeWidth={2} aria-hidden="true" />
+                        ) : (
+                          <ChevronRight size={14} strokeWidth={2} aria-hidden="true" />
+                        )}
+                        {!expanded.has(field.id) && hasHidden(i) && (
+                          <span
+                            aria-hidden="true"
+                            title="접힌 칸에 값이 있습니다"
+                            className="absolute -right-0.5 -top-0.5 block h-1.5 w-1.5 rounded-full bg-content-accent"
+                          />
+                        )}
+                      </span>
+                    </IconButton>
+                  </td>
                   <td className="px-2 py-1.5 text-caption tabular text-content-tertiary">
                     {i + 1}
                   </td>
@@ -461,6 +526,63 @@ export function RateDetailEditor({ tariffId }: { tariffId: string }) {
                     </div>
                   </td>
                 </tr>
+
+                {expanded.has(field.id) && (
+                  <tr className="border-b border-line-subtle bg-surface-sunken/60 last:border-0">
+                    <td />
+                    {/*
+                      펼침 칸 앞의 <td /> 가 펼침 열을 덮는다. 남는 열은
+                      # · 조건들 · 기본료 · [단가] · 최소 · 추가정차 · 우선 · 줄조작.
+                    */}
+                    <td
+                      colSpan={conditionCols.length + (unitLabel ? 7 : 6)}
+                      className="px-2 py-3"
+                    >
+                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                        <MiniField label="상한금액" hint="계산 결과가 이보다 크면 이 금액">
+                          <CellInput
+                            {...money(`rows.${i}.maxAmount`)}
+                            disabled={locked}
+                            error={rowErrors(i, 'maxAmount')}
+                            inputMode="numeric"
+                            numeric
+                            aria-label={`${i + 1}번째 줄 상한금액`}
+                          />
+                        </MiniField>
+                        <MiniField label="대기 무료" hint="분. 이 시간까지는 대기료 없음">
+                          <CellInput
+                            {...register(`rows.${i}.waitingFreeMin` as never)}
+                            disabled={locked}
+                            error={rowErrors(i, 'waitingFreeMin')}
+                            inputMode="numeric"
+                            numeric
+                            aria-label={`${i + 1}번째 줄 대기 무료시간`}
+                          />
+                        </MiniField>
+                        <MiniField label="시간당 대기료" hint="무료시간을 넘긴 뒤">
+                          <CellInput
+                            {...money(`rows.${i}.waitingRateHour`)}
+                            disabled={locked}
+                            error={rowErrors(i, 'waitingRateHour')}
+                            inputMode="numeric"
+                            numeric
+                            aria-label={`${i + 1}번째 줄 시간당 대기료`}
+                          />
+                        </MiniField>
+                        <MiniField label="비고">
+                          <CellInput
+                            {...register(`rows.${i}.remark` as never)}
+                            disabled={locked}
+                            error={rowErrors(i, 'remark')}
+                            placeholder="이 줄을 쓰는 조건을 적습니다"
+                            aria-label={`${i + 1}번째 줄 비고`}
+                          />
+                        </MiniField>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </FragmentRow>
               ))}
             </tbody>
           </table>
@@ -481,6 +603,33 @@ export function RateDetailEditor({ tariffId }: { tariffId: string }) {
         </Button>
       </div>
     </form>
+  );
+}
+
+/**
+ * 한 줄이 두 개의 <tr> 로 나뉘므로 감싸는 조각이 필요하다.
+ * <tbody> 안에서는 <div> 로 감쌀 수 없다 — 표 구조가 깨진다.
+ */
+function FragmentRow({ children }: { children: React.ReactNode }) {
+  return <>{children}</>;
+}
+
+/** 펼친 줄 안의 작은 칸. 표의 열 머리가 없으니 라벨을 직접 단다 */
+function MiniField({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-caption text-content-secondary">{label}</span>
+      {children}
+      {hint && <span className="mt-1 block text-caption text-content-tertiary">{hint}</span>}
+    </label>
   );
 }
 
