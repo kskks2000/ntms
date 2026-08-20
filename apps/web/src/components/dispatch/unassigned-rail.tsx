@@ -18,7 +18,14 @@ import { cn } from '@/lib/cn';
  * 출발이 임박한 것부터 위로 온다. 목록 순서 자체가 "먼저 손대야 할 것" 을
  * 말해야 하고, 그러면 사람이 정렬 조건을 고르지 않아도 된다.
  */
-export function UnassignedRail({ trips }: { trips: UnassignedTrip[] }) {
+export function UnassignedRail({
+  trips,
+  onAssign,
+}: {
+  trips: UnassignedTrip[];
+  /** 주면 줄을 눌러 바로 배차할 수 있다 */
+  onAssign?: (trip: UnassignedTrip) => void;
+}) {
   if (trips.length === 0) {
     return (
       <EmptyState
@@ -36,7 +43,10 @@ export function UnassignedRail({ trips }: { trips: UnassignedTrip[] }) {
         const passed = trip.minutesToStart !== null && trip.minutesToStart < 0;
 
         return (
-          <li key={trip.tripId} className="px-4 py-3">
+          <li
+            key={trip.tripId}
+            className={cn('px-4 py-3', onAssign && 'transition-colors hover:bg-surface-sunken')}
+          >
             <div className="flex items-baseline gap-2">
               <span className="tabular text-caption text-content-tertiary">
                 {trip.tripNo}
@@ -85,6 +95,21 @@ export function UnassignedRail({ trips }: { trips: UnassignedTrip[] }) {
                 <span className="text-status-warning">운송사 미정</span>
               )}
             </p>
+
+            {/*
+              운송사가 정해진 것만 배차 단추를 준다. 안 정해진 트립에
+              단추를 보이면 눌러 보고 나서야 "배정 먼저" 라는 말을 듣는다.
+            */}
+            {onAssign && trip.carrierName && (
+              <button
+                type="button"
+                onClick={() => onAssign(trip)}
+                className="mt-2 inline-flex h-7 items-center gap-1.5 rounded-md border border-line-field bg-surface-card px-2.5 text-caption font-medium text-content-primary transition-colors hover:bg-surface-sunken"
+              >
+                <Truck size={12} strokeWidth={2} aria-hidden="true" />
+                차량 붙이기
+              </button>
+            )}
           </li>
         );
       })}

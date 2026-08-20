@@ -281,13 +281,29 @@ function timeWindow(
   return { windowFrom: from, windowTo: to };
 }
 
+/**
+ * 기준일을 **UTC 자정**으로 만든다.
+ *
+ * `new Date('2026-08-20')` 는 이미 UTC 자정인데, 여기에 setHours(0,0,0,0) 을
+ * 걸면 로컬 자정으로 되돌아간다 — KST 에서는 2026-08-19T15:00Z 가 되고,
+ * Postgres 의 date 컬럼과 맞추면 하루 앞선 날을 조회한다.
+ *
+ * 증상이 고약한 이유는 **틀린 날의 데이터가 멀쩡히 나오기 때문**이다.
+ * 빈 화면이면 금방 알아채지만, 어제 트립이 오늘 것처럼 보이면 모른 채
+ * 배차한다.
+ */
 function parseDate(input?: string): Date {
-  const d = input && /^\d{4}-\d{2}-\d{2}$/.test(input) ? new Date(input) : new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
+  if (input && /^\d{4}-\d{2}-\d{2}$/.test(input)) {
+    return new Date(`${input}T00:00:00Z`);
+  }
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  // 오늘이 며칠인지는 보는 사람 기준(로컬)이고, 담는 그릇은 UTC 자정이다
+  return new Date(
+    `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T00:00:00Z`,
+  );
 }
 
 function toDateString(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return d.toISOString().slice(0, 10);
 }

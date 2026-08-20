@@ -350,7 +350,7 @@ export class OrderWriteService {
         return { id: String(order_id), orderNo: null as string | null };
       }
 
-      const order_no = await nextOrderNo(tx, tenant_id, v.orderDate);
+      const order_no = await nextOrderNo(tx, tenant_id);
       const row = await tx.transport_order.create({
         data: { tenant_id, order_no, status: 'RECEIVED', ...data },
       });
@@ -455,24 +455,22 @@ function itemRows(tenant_id: bigint, order_id: bigint, v: OrderFormValues) {
 }
 
 /**
- * 오더번호를 만든다 — `ORD-YYMMDD-0001`.
+ * 오더번호를 만든다.
  *
- * 날짜를 넣는 이유는 사람이 번호만 보고 언제 것인지 알기 위해서다. 배차실
- * 전화 통화에서 "오늘 들어온 12번" 같은 말이 실제로 오간다.
+ * 직접 만들지 않고 DB 의 fn_next_no 를 쓴다. 채번 규칙(numbering_rule)이
+ * 테넌트별로 접두어 · 날짜형식 · 자릿수 · 초기화 주기를 들고 있고, 시드와
+ * 연계 배치가 이미 그것을 쓴다. 애플리케이션이 따로 번호를 지으면 같은
+ * 시스템 안에서 형식이 둘로 갈린다.
  *
- * 같은 날의 마지막 번호에 1을 더한다. 동시에 두 건이 들어오면 유니크
- * 인덱스(ux_order_no)가 막고, 그때는 재시도한다.
+ * 함수 안에서 시퀀스를 잠그므로 동시에 들어와도 번호가 겹치지 않는다.
  */
-async function nextOrderNo(tx: TxClient, tenant_id: bigint, orderDate: string): Promise<string> {
-  const yymmdd = orderDate.slice(2).replace(/-/g, '');
-  const prefix = `ORD-${yymmdd}-`;
-  const last = await tx.transport_order.findFirst({
-    where: { tenant_id, order_no: { startsWith: prefix } },
-    orderBy: { order_no: 'desc' },
-    select: { order_no: true },
-  });
-  const seq = last ? Number(last.order_no.slice(prefix.length)) + 1 : 1;
-  return prefix + String(seq).padStart(4, '0');
+async function nextOrderNo(tx: TxClient, tenant_id: bigint): Promise<string> {
+  const rows = await tx.$queryRaw<Array<{ no: string }>>`
+    SELECT ntms.fn_next_no(${tenant_id}::BIGINT, 'ORDER'::VARCHAR) AS no
+  `;
+  const no = rows[0]?.no;
+  if (!no) throw AppError.badRequest('ORDER_NO_FAILED', '오더번호를 만들지 못했습니다.');
+  return no;
 }
 
 function toId(value: string): bigint {

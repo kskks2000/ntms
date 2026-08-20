@@ -7,6 +7,7 @@ import { PageHeader } from '@/components/app/page-header';
 import { GanttBoard } from '@/components/dispatch/gantt-board';
 import { LaneDiagram } from '@/components/dispatch/lane-diagram';
 import { BarDetail, UnassignedRail } from '@/components/dispatch/unassigned-rail';
+import { DispatchAssignDrawer } from '@/components/plan/dispatch-assign-drawer';
 import { EmptyState, Panel, Skeleton, Stat, StatRow } from '@/components/tms/panels';
 import { Button } from '@/components/ui/button';
 import { useApiQuery } from '@/lib/query';
@@ -30,6 +31,8 @@ export default function DispatchBoardPage() {
   const [date, setDate] = useState(() => toDateInput(new Date()));
   const [axis, setAxis] = useState<Axis>('vehicle');
   const [showIdle, setShowIdle] = useState(false);
+  /** 배차 지시 서랍. null 이면 닫힘 */
+  const [assigning, setAssigning] = useState<{ tripId: string; tripNo: string } | null>(null);
   const [selected, setSelected] = useState<{ bar: BoardBar; vehicle: BoardVehicle } | null>(
     null,
   );
@@ -218,7 +221,10 @@ export default function DispatchBoardPage() {
               subtitle={data ? `${data.unassigned.length}트립` : undefined}
             >
               {data ? (
-                <UnassignedRail trips={data.unassigned} />
+                <UnassignedRail
+                  trips={data.unassigned}
+                  onAssign={(t) => setAssigning({ tripId: t.tripId, tripNo: t.tripNo })}
+                />
               ) : (
                 <div className="space-y-3 p-4">
                   {Array.from({ length: 3 }).map((_, i) => (
@@ -229,6 +235,18 @@ export default function DispatchBoardPage() {
             </Panel>
           </div>
         </div>
+
+        {assigning && (
+          <DispatchAssignDrawer
+            tripId={assigning.tripId}
+            tripNo={assigning.tripNo}
+            onClose={() => setAssigning(null)}
+            onDone={() => {
+              setAssigning(null);
+              void query.refetch();
+            }}
+          />
+        )}
       </div>
     </>
   );
