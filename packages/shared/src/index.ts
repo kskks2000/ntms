@@ -5,6 +5,7 @@ export * from './enums.js';
 export * from './master.js';
 export * from './master-form.js';
 export * from './rate-detail.js';
+export * from './order-detail.js';
 export * from './menu.js';
 export * from './order.js';
 export * from './response.js';

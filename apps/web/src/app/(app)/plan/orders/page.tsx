@@ -1,11 +1,14 @@
 'use client';
 
 import { ClipboardList, Download, Plus, Search, X } from 'lucide-react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import {
   ORDER_STATUS,
   ORDER_STATUS_LABEL,
   ORDER_STATUS_PHASE,
+  type MasterOptions,
   type OrderListItem,
   type OrderListSummary,
   type PageResult,
@@ -36,6 +39,19 @@ export default function OrdersPage() {
   const [keyword, setKeyword] = useState('');
   const [keywordInput, setKeywordInput] = useState('');
   const [sort, setSort] = useState<SortState>({ key: 'orderDate', dir: 'desc' });
+  /*
+    화주와 상차일 기간은 API 가 이미 받고 있었는데 화면에 없었다.
+    배차실에서 가장 자주 하는 질문이 "이번 주 한빛식품 건" 이라 그 두 개를
+    꺼내 둔다. 나머지 조건은 검색어로 충분하다.
+  */
+  const [shipperId, setShipperId] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+
+  const router = useRouter();
+  const options = useApiQuery<MasterOptions>(['master-options'], '/master/options', {
+    staleTime: 5 * 60_000,
+  });
 
   const path = useMemo(() => {
     const params = new URLSearchParams({
@@ -45,11 +61,16 @@ export default function OrdersPage() {
     });
     if (status) params.set('status', status);
     if (keyword) params.set('keyword', keyword);
+    if (shipperId) params.set('shipperId', shipperId);
+    if (dateFrom) params.set('pickupDateFrom', dateFrom);
+    if (dateTo) params.set('pickupDateTo', dateTo);
     return `/orders?${params.toString()}`;
-  }, [page, size, status, keyword, sort]);
+  }, [page, size, status, keyword, sort, shipperId, dateFrom, dateTo]);
 
   const query = useApiQuery<OrderListResponse>(['orders', path], path);
   const data = query.data;
+
+  const hasCondition = Boolean(status || keyword || shipperId || dateFrom || dateTo);
 
   const applyKeyword = () => {
     setKeyword(keywordInput.trim());
@@ -160,9 +181,13 @@ export default function OrdersPage() {
             >
               내려받기
             </Button>
-            <Button leadingIcon={<Plus size={16} strokeWidth={1.75} aria-hidden="true" />}>
+            <Link
+              href="/plan/orders/new"
+              className="inline-flex h-10 items-center gap-2 rounded-md bg-action px-4 text-body font-medium text-action-text transition-colors hover:bg-action-hover"
+            >
+              <Plus size={16} strokeWidth={1.75} aria-hidden="true" />
               오더 등록
-            </Button>
+            </Link>
           </>
         }
       />
@@ -197,7 +222,51 @@ export default function OrdersPage() {
             }}
           />
 
-          {(status || keyword) && (
+          <label className="flex items-center gap-1.5">
+            <span className="sr-only">화주</span>
+            <select
+              value={shipperId}
+              onChange={(ev) => {
+                setShipperId(ev.target.value);
+                setPage(1);
+              }}
+              className="field-text h-10 rounded-md border border-line-field bg-surface-field px-2 text-label text-content-primary"
+            >
+              <option value="">화주 전체</option>
+              {(options.data?.shippers ?? []).map((sh) => (
+                <option key={sh.id} value={sh.id}>
+                  {sh.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex items-center gap-1.5 text-caption text-content-tertiary">
+            <span>상차일</span>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(ev) => {
+                setDateFrom(ev.target.value);
+                setPage(1);
+              }}
+              aria-label="상차일 시작"
+              className="field-text h-10 rounded-md border border-line-field bg-surface-field px-2 text-label text-content-primary"
+            />
+            <span aria-hidden="true">~</span>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(ev) => {
+                setDateTo(ev.target.value);
+                setPage(1);
+              }}
+              aria-label="상차일 종료"
+              className="field-text h-10 rounded-md border border-line-field bg-surface-field px-2 text-label text-content-primary"
+            />
+          </label>
+
+          {(status || keyword || shipperId || dateFrom || dateTo) && (
             <Button
               variant="ghost"
               size="sm"
@@ -205,6 +274,9 @@ export default function OrdersPage() {
                 setStatus('');
                 setKeyword('');
                 setKeywordInput('');
+                setShipperId('');
+                setDateFrom('');
+                setDateTo('');
                 setPage(1);
               }}
               leadingIcon={<X size={14} strokeWidth={2} aria-hidden="true" />}
@@ -240,6 +312,9 @@ export default function OrdersPage() {
             columns={columns}
             rows={data?.items ?? []}
             getRowKey={(o) => o.orderId}
+            // 줄을 누르면 상세로 간다. 배차실에서 목록을 여는 목적은 거의
+            // 언제나 "그 건 어떻게 됐나" 를 보는 것이다.
+            onRowClick={(o) => router.push(`/plan/orders/${o.orderId}`)}
             loading={query.isLoading}
             sort={sort}
             onSortChange={(next) => {
@@ -250,19 +325,21 @@ export default function OrdersPage() {
               <EmptyState
                 icon={<ClipboardList size={26} strokeWidth={1.5} />}
                 title={
-                  status || keyword ? '조건에 맞는 오더가 없습니다' : '접수된 오더가 없습니다'
+                  hasCondition ? '조건에 맞는 오더가 없습니다' : '접수된 오더가 없습니다'
                 }
                 description={
-                  status || keyword
-                    ? '검색어나 상태 조건을 바꿔 보세요.'
+                  hasCondition
+                    ? '검색어나 조건을 바꿔 보세요.'
                     : '화주 시스템에서 오더가 들어오거나, 직접 등록하면 여기에 쌓입니다.'
                 }
                 action={
-                  <Button
-                    leadingIcon={<Plus size={16} strokeWidth={1.75} aria-hidden="true" />}
+                  <Link
+                    href="/plan/orders/new"
+                    className="inline-flex h-10 items-center gap-2 rounded-md bg-action px-4 text-body font-medium text-action-text transition-colors hover:bg-action-hover"
                   >
+                    <Plus size={16} strokeWidth={1.75} aria-hidden="true" />
                     오더 등록
-                  </Button>
+                  </Link>
                 }
               />
             }
