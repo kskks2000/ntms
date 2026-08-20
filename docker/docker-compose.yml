@@ -156,9 +156,8 @@ services:
       # HTTPS 를 붙이기 전까지는 .env 에서 false 로 내려야 세션이 유지된다
       COOKIE_SECURE: ${COOKIE_SECURE:-}
       # 지도. 비워 두면 지도 자리에 안내 문구만 보인다
-      NAVER_MAPS_CLIENT_ID: ${NAVER_MAPS_CLIENT_ID:-}
-      NAVER_API_KEY_ID: ${NAVER_API_KEY_ID:-}
-      NAVER_API_KEY: ${NAVER_API_KEY:-}
+      NAVER_MAP_CLIENT_ID: ${NAVER_MAP_CLIENT_ID:-}
+      NAVER_MAP_CLIENT_SECRET: ${NAVER_MAP_CLIENT_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy

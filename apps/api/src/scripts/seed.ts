@@ -160,6 +160,7 @@ const MENUS: MenuSeed[] = [
     icon: 'truck',
     children: [
       { code: 'EXEC_CONTROL', name: '실시간 관제', path: '/execution/control' },
+      { code: 'EXEC_TRACKING', name: '실시간 추적', path: '/execution/tracking' },
       { code: 'EXEC_POD', name: '인수증(POD)', path: '/execution/pod' },
       { code: 'EXEC_EXCEPTION', name: '운송 예외', path: '/execution/exceptions' },
     ],

@@ -44,6 +44,22 @@ export interface MapMarker {
 /** [경도, 위도] 쌍 — 네이버 Directions 가 주는 순서 그대로 */
 export type MapPath = [number, number][];
 
+/**
+ * 겹쳐 그릴 선.
+ *
+ * 트래킹에서는 두 겹이 필요하다 — **가야 할 길**(도로 경로)과 **지나온
+ * 길**(단말이 보낸 자취). 둘을 같은 굵기·같은 색으로 그리면 어느 쪽이
+ * 계획이고 어느 쪽이 실제인지 알 수 없으므로 별개의 선으로 받는다.
+ */
+export interface MapLine {
+  path: MapPath;
+  color?: string;
+  weight?: number;
+  opacity?: number;
+  /** 점선. 아직 안 지난 구간이나 추정선에 쓴다 */
+  dashed?: boolean;
+}
+
 let sdkPromise: Promise<void> | null = null;
 
 function loadSdk(clientId: string): Promise<void> {
@@ -76,6 +92,7 @@ const TONE_COLOR = {
 export function NaverMap({
   markers = [],
   path,
+  lines,
   className,
   height = 360,
   /** 지도가 안 뜰 때 자리에 보일 설명. 화면마다 다르다 */
@@ -83,6 +100,8 @@ export function NaverMap({
 }: {
   markers?: MapMarker[];
   path?: MapPath;
+  /** 여러 겹으로 그릴 선. 뒤에 오는 것이 위에 얹힌다 */
+  lines?: MapLine[];
   className?: string;
   height?: number;
   fallbackHint?: string;
@@ -163,23 +182,29 @@ export function NaverMap({
       any = true;
     }
 
-    if (path && path.length > 1) {
-      const line = new maps.Polyline({
+    const allLines: MapLine[] = [
+      ...(path && path.length > 1 ? [{ path }] : []),
+      ...(lines ?? []),
+    ];
+    for (const line of allLines) {
+      if (line.path.length < 2) continue;
+      const drawn = new maps.Polyline({
         map,
-        path: path.map(([lng, lat]) => new maps.LatLng(lat, lng)),
-        strokeColor: '#0f766e',
-        strokeWeight: 4,
-        strokeOpacity: 0.75,
+        path: line.path.map(([lng, lat]) => new maps.LatLng(lat, lng)),
+        strokeColor: line.color ?? '#0f766e',
+        strokeWeight: line.weight ?? 4,
+        strokeOpacity: line.opacity ?? 0.75,
+        strokeStyle: line.dashed ? 'shortdash' : 'solid',
       });
-      drawnRef.current.push(line);
-      for (const [lng, lat] of path) {
+      drawnRef.current.push(drawn);
+      for (const [lng, lat] of line.path) {
         bounds.extend(new maps.LatLng(lat, lng));
         any = true;
       }
     }
 
     if (any) map.fitBounds(bounds, { top: 40, right: 40, bottom: 40, left: 40 });
-  }, [ready, markers, path]);
+  }, [ready, markers, path, lines]);
 
   if (config.isLoading) {
     return <Placeholder height={height} className={className}>지도를 준비하는 중…</Placeholder>;
@@ -191,7 +216,7 @@ export function NaverMap({
         <span className="font-medium text-content-secondary">지도 키가 설정되지 않았습니다</span>
         <span className="mt-1 block">
           {fallbackHint ??
-            '서버 .env 에 NAVER_MAPS_CLIENT_ID 를 넣으면 여기에 지도가 나옵니다.'}
+            '서버 .env 에 NAVER_MAP_CLIENT_ID 를 넣으면 여기에 지도가 나옵니다.'}
         </span>
       </Placeholder>
     );

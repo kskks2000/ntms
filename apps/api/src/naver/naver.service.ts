@@ -21,9 +21,8 @@ import { AppError } from '../common/api-error.js';
  * ## 발급받을 것 (NCP 콘솔)
  *
  *   Maps > Application 등록 후
- *     NAVER_MAPS_CLIENT_ID   브라우저용. 지도 SDK 를 부를 때 쓴다
- *     NAVER_API_KEY_ID       서버용 x-ncp-apigw-api-key-id
- *     NAVER_API_KEY          서버용 x-ncp-apigw-api-key
+ *     NAVER_MAP_CLIENT_ID       Client ID
+ *     NAVER_MAP_CLIENT_SECRET   Client Secret (서버 전용)
  *
  *   Application 의 "Web 서비스 URL" 에 접속 도메인을 등록해야 SDK 가 뜬다.
  *   지금이면 http://www.qqq.ai.kr 과 http://175.45.193.174 둘 다.
@@ -37,13 +36,25 @@ export class NaverService {
   private readonly apiKey: string | null;
 
   constructor(config: ConfigService) {
-    this.clientId = trimmed(config.get<string>('NAVER_MAPS_CLIENT_ID'));
-    this.apiKeyId = trimmed(config.get<string>('NAVER_API_KEY_ID'));
-    this.apiKey = trimmed(config.get<string>('NAVER_API_KEY'));
+    /*
+      NCP Maps 는 Application 하나에 Client ID · Client Secret 한 쌍을 준다.
+      그 한 쌍이 두 곳에 쓰인다 —
+
+        JS SDK      ncpKeyId = Client ID
+        REST API    x-ncp-apigw-api-key-id = Client ID
+                    x-ncp-apigw-api-key    = Client Secret
+
+      즉 브라우저에 나가는 값과 서버 전용 값이 갈리는 지점은 **Secret 하나**다.
+      Client ID 는 원래 화면에 박히는 값이라 감출 대상이 아니고, 대신 NCP
+      콘솔의 "Web 서비스 URL" 로 도메인을 묶어 남이 못 쓰게 한다.
+    */
+    this.clientId = trimmed(config.get<string>('NAVER_MAP_CLIENT_ID'));
+    this.apiKeyId = this.clientId;
+    this.apiKey = trimmed(config.get<string>('NAVER_MAP_CLIENT_SECRET'));
 
     if (!this.clientId) {
       this.logger.warn(
-        '지도 키가 없습니다 (NAVER_MAPS_CLIENT_ID). 지도 화면은 안내 문구만 보입니다',
+        '지도 키가 없습니다 (NAVER_MAP_CLIENT_ID). 지도 화면은 안내 문구만 보입니다',
       );
     }
   }

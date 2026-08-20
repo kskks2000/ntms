@@ -61,6 +61,8 @@ const addDays = (d: Date, n: number) => new Date(d.getTime() + n * 86_400_000);
 const dateOnly = (d: Date) =>
   new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
 
+const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+
 /**
  * 만료일을 실제 차고처럼 흩는다.
  *
@@ -114,11 +116,62 @@ const timeOfDay = (minutesFromMidnight: number): Date => {
   const m = clampToDay(minutesFromMidnight);
   return new Date(Date.UTC(1970, 0, 1, Math.floor(m / 60), m % 60));
 };
-const todayDate = () => {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
-};
+/*
+  오늘. date 컬럼용이므로 dateOnly 를 거친다.
+
+  setHours(0,0,0,0) 로 만든 로컬 자정은 KST 에서 전날 15시 UTC 라, 오더·
+  트립·실행의 날짜가 전부 하루 앞당겨 저장된다. 값이 하루 어긋나면 화면은
+  멀쩡한 데이터를 그리므로 눈치채기 어렵다 — 틀린 날의 데이터가 정상으로
+  보이기 때문이다.
+*/
+const todayDate = () => dateOnly(new Date());
+
+/**
+ * 예외 유형 · 설명 · 조치 한 묶음.
+ *
+ * 셋을 따로 뽑으면 서로 안 맞는 줄이 나오고, 화면을 보는 사람은 그 한 줄에서
+ * 데이터 전체를 못 믿기 시작한다. 데모 데이터가 그럴듯해야 화면의 판단이
+ * 맞는지 볼 수 있다.
+ */
+/** 인수 결과와 그 사유. 둘은 늘 같이 다닌다 */
+const POD_FLAWS = [
+  { result: 'DAMAGED' as const, reason: '외박스 눌림 2박스, 수하처 확인서 수령' },
+  { result: 'SHORTAGE' as const, reason: '검수 수량 부족, 재고 확인 요청' },
+  { result: 'PARTIAL' as const, reason: '일부만 인수, 잔여분 익일 재배송' },
+] as const;
+
+const EXCEPTION_KINDS = [
+  {
+    type: 'TRAFFIC' as const,
+    description: '경부고속도로 안성분기점 사고로 정체',
+    action: '국도 우회 안내, 화주에 도착 지연 통보',
+  },
+  {
+    type: 'LOADING_DELAY' as const,
+    description: '상차지 도크가 차 있어 대기',
+    action: '상차지에 도크 배정 요청, 다음 회차 시간 조정',
+  },
+  {
+    type: 'BREAKDOWN' as const,
+    description: '냉동기 경고등 점등, 갓길 점검',
+    action: '인근 정비소에서 냉매 보충 후 재출발',
+  },
+  {
+    type: 'WEATHER' as const,
+    description: '폭우로 서행 구간 발생',
+    action: '기상 정보 확인 후 출발 시각 재조정',
+  },
+  {
+    type: 'CUSTOMER_ABSENT' as const,
+    description: '하차지 담당자 부재로 인수 대기',
+    action: '수하처 연락 후 대체 인수인 확인',
+  },
+  {
+    type: 'DOCUMENT' as const,
+    description: '거래명세서 누락으로 게이트 통과 지연',
+    action: '사본 전송으로 반입 처리, 원본 익일 제출',
+  },
+] as const;
 
 // ---------------------------------------------------------------------
 // 기준정보
@@ -281,6 +334,10 @@ async function main(): Promise<void> {
       console.log('기존 데모 데이터 삭제 중...');
       // FK 역순으로 지운다. order_status_history 는 트리거가 만든 것이라
       // 오더보다 먼저 치워야 한다.
+      await prisma.pod.deleteMany({ where: { tenant_id: tenantId } });
+      await prisma.transport_exception.deleteMany({ where: { tenant_id: tenantId } });
+      await prisma.gps_log.deleteMany({ where: { tenant_id: tenantId } });
+      await prisma.execution_stop.deleteMany({ where: { tenant_id: tenantId } });
       await prisma.transport_execution.deleteMany({ where: { tenant_id: tenantId } });
       await prisma.dispatch.deleteMany({ where: { tenant_id: tenantId } });
       await prisma.allocation.deleteMany({ where: { tenant_id: tenantId } });
@@ -528,10 +585,19 @@ async function main(): Promise<void> {
       driverIds.push(row.driver_id);
     }
 
-    // 차종 구성은 물동량을 감당할 수 있어야 한다. 장거리 한 건이 5~7시간을
-    // 잡아먹는데 25톤이 두 대뿐이면 하루에 네 건밖에 못 돌고, 나머지는
-    // 갈 곳이 없어 겹쳐 잡힌다 — 데이터가 아니라 차량 구성의 문제다.
+    /*
+      차종 구성은 물동량을 감당할 수 있어야 한다.
+
+      장거리 한 건이 5~7시간을 잡아먹는데 25톤이 두 대뿐이면 하루에 네
+      건밖에 못 돌고, 나머지는 갈 곳이 없어 겹쳐 잡힌다 — 데이터가 아니라
+      차량 구성의 문제다.
+
+      트립 무게가 대개 19~21톤이라 실을 수 있는 차는 25톤 트레일러뿐이고,
+      그 트립들의 시간대가 하루에 걸쳐 겹친다. 열 대는 있어야 한 대에
+      쌓이지 않는다.
+    */
     const VEHICLE_PLAN = [
+      'TR-25', 'TR-25', 'TR-25', 'TR-25', 'TR-25',
       'TR-25', 'TR-25', 'TR-25', 'TR-25', 'TR-25',
       'WG-11', 'WG-11', 'WG-11', 'WG-11', 'WG-11', 'WG-11',
       'RF-11', 'RF-11', 'RF-11', 'RF-11',
@@ -907,6 +973,10 @@ async function main(): Promise<void> {
     let allocationCount = 0;
     let dispatchCount = 0;
     let executionCount = 0;
+    let stopActualCount = 0;
+    let gpsCount = 0;
+    let exceptionCount = 0;
+    let podCount = 0;
 
     for (const plan of TRIP_PLAN) {
       const pool = pools.get(plan.orderStatus)!;
@@ -938,27 +1008,85 @@ async function main(): Promise<void> {
         });
         const fitting = capable.length > 0 ? capable : vehicleIds;
 
-        // --- 언제 · 어느 차에 붙일까 ---------------------------------
-        //
-        // 실제 배차 담당자가 하는 판단을 그대로 옮긴다. 차를 먼저 고르고
-        // 시각을 나중에 정하면 25톤 트레일러 두 대에 장거리가 전부 몰려
-        // 배차판이 온통 "겹침" 이 된다. 순서를 뒤집어야 한다 —
-        // **가장 빨리 비는 차를 찾고, 그 차가 비는 시각에 붙인다.**
+        /* --- 언제 · 어느 차에 붙일까 ---------------------------------
+
+          **시각을 먼저 정하고, 그 시각에 비어 있는 차를 고른다.**
+
+          순서가 중요하다. 차를 먼저 고르면 그 차가 비는 시각이 곧 출발
+          시각이 되는데, 그러면 '완료' 로 표시된 트립이 밤 11시에 끝나는
+          것으로 잡힌다. 화면은 그래도 멀쩡히 그려지므로 이 어긋남은 눈에
+          잘 안 띄는데, 실제로는 —
+
+            인수증 경과 시간이 전부 0시간이 된다 (아직 안 끝났으니까)
+            관제의 정시율이 아직 오지 않은 도착을 세고 있다
+            지연 전파 축이 미래 시각을 '실적' 으로 그린다
+
+          그래서 상태가 시각을 정한다. 끝난 것은 지금보다 앞에, 진행 중인
+          것은 지금을 물고, 아직 안 떠난 것은 지금보다 뒤에.
+        */
         const durationMs = (lane.min + 90) * 60_000;
         const dayOpen = todayAt(OPERATING_HOURS.from, 0).getTime();
-        const dayClose = todayAt(OPERATING_HOURS.to, 0).getTime();
+        const nowMs = Date.now();
 
+        const targetStart = (() => {
+          switch (plan.tripStatus) {
+            case 'CLOSED':
+              /*
+                정산까지 끝난 건은 어제 것이다.
+
+                오늘 안에 다 넣으면 인수증 경과 막대가 전부 하루 안쪽이 되고,
+                "이틀째 안 들어온 인수증" 이라는 이 화면의 본론이 데이터에
+                한 건도 없게 된다.
+              */
+              return (
+                todayAt(OPERATING_HOURS.from).getTime() -
+                24 * 3_600_000 +
+                intBetween(0, 480) * 60_000
+              );
+            case 'COMPLETED':
+              /*
+                오늘 아침에 떠나 지금보다 한 시간 이상 전에 끝났다.
+
+                운영시간 안에 두는 이유는 배차판 때문이다. 새벽 두 시에
+                시작하는 막대가 하나 있으면 간트 축이 그만큼 늘어나, 정작
+                지금 시각 근처가 화면 밖으로 밀린다.
+              */
+              return clamp(
+                nowMs - durationMs - intBetween(60, 300) * 60_000,
+                todayAt(OPERATING_HOURS.from).getTime(),
+                Math.max(todayAt(OPERATING_HOURS.from).getTime(), nowMs - durationMs - 3_600_000),
+              );
+            case 'EXECUTING':
+              // 지금 도로 위에 있다 — 2할에서 8할 사이를 지났다
+              return nowMs - Math.round(durationMs * between(0.2, 0.8));
+            default:
+              /*
+                아직 안 떠났다. 지금부터 여섯 시간 안에 떠난다.
+
+                영업 종료(22시) 전에 끝나도록 당기지 않는다. 일곱 시간짜리
+                장거리는 어차피 자정을 넘기고, 억지로 당기면 그런 트립들이
+                전부 같은 시각에 몰려 배차판이 한 줄로 겹친다.
+              */
+              return nowMs + intBetween(20, 360) * 60_000;
+          }
+        })();
+
+        /*
+          그 시각에 비어 있는 차 중 **가장 오래 논 차**를 고른다.
+
+          먼저 찾은 차를 쓰면 목록 앞쪽 몇 대에 전부 몰린다. 차량이 트립보다
+          많은데도 배차판이 겹침으로 뒤덮이고, 겹침 경고가 늘 켜져 있어
+          진짜 겹침을 못 알아본다.
+        */
         let chosen: { id: bigint; start: number } | null = null;
+        let idlest = Number.POSITIVE_INFINITY;
         for (const id of fitting) {
-          const lastEnd = lastEndByVehicle.get(id.toString());
+          const lastEnd = lastEndByVehicle.get(id.toString()) ?? 0;
           // 앞 운행이 끝나고 40분은 쉬어야 다음 배차가 가능하다
-          const earliest =
-            lastEnd === undefined
-              ? dayOpen + intBetween(0, 210) * 60_000
-              : lastEnd + 40 * 60_000;
-          if (earliest + durationMs > dayClose) continue;
-          if (chosen === null || earliest < chosen.start) {
-            chosen = { id, start: earliest };
+          if (lastEnd + 40 * 60_000 > targetStart) continue;
+          if (lastEnd < idlest) {
+            idlest = lastEnd;
+            chosen = { id, start: targetStart };
           }
         }
 
@@ -978,19 +1106,20 @@ async function main(): Promise<void> {
           };
         }
 
-        // 하루 안에 넣을 자리가 없으면 **가장 일찍 비는** 차에 얹는다.
-        // 무작위로 고르면 이미 꽉 찬 차에 또 얹혀 겹침이 번진다.
+        /*
+          그 시각에 비는 차가 없으면 가장 일찍 비는 차에 얹는다 — 시각은
+          그대로 둔다. 여기서 시각을 미루면 상태와 다시 어긋나므로, 차라리
+          겹침으로 남긴다. 겹침은 배차판이 경고로 보여 주지만, 하루 밀린
+          날짜는 아무 화면도 안 알려 준다.
+        */
         if (chosen === null) {
-          let leastBusy = fitting[0]!;
-          let leastEnd = Number.POSITIVE_INFINITY;
-          for (const id of fitting) {
-            const end = lastEndByVehicle.get(id.toString()) ?? dayOpen;
-            if (end < leastEnd) {
-              leastEnd = end;
-              leastBusy = id;
-            }
-          }
-          chosen = { id: leastBusy, start: Math.max(dayOpen, leastEnd) };
+          /*
+            **번갈아** 얹는다. 가장 한가한 차를 고르면 안 된다 —
+            lastEndByVehicle 은 max 로만 갱신되므로(일부러 겹치게 만든
+            배차 때문에 그렇다) 한 번 앞선 차는 영영 '가장 한가한' 자리를
+            벗어나지 못하고, 넘치는 트립이 전부 그 한 대에 쌓인다.
+          */
+          chosen = { id: fitting[vehicleCursor % fitting.length]!, start: targetStart };
         }
 
         // 타입을 굳이 적는다. 없으면 TS 가 제어 흐름을 한 바퀴 돌다 막힌다 —
@@ -1018,7 +1147,10 @@ async function main(): Promise<void> {
           data: {
             tenant_id: tenantId,
             trip_no: tripNos[tripIndex]!.no,
-            plan_date: todayDate(),
+            // 자정을 넘겨 달리는 트립이 있으므로 출발일을 쓴다. 늘 오늘로
+            // 박아 두면 어제 22시에 떠난 트립이 오늘 자로 잡혀, 배차판과
+            // 관제가 같은 트립을 서로 다른 날에서 찾는다.
+            plan_date: dateOnly(startAt),
             trip_type: members.length > 1 ? 'CONSOLIDATED' : 'SINGLE',
             transport_mode: 'ROAD',
             required_vehicle_type_id: vinfo.typeId,
@@ -1087,6 +1219,22 @@ async function main(): Promise<void> {
               planned_arrival_at: stop.at,
               planned_departure_at: addMinutes(stop.at, 45),
               planned_service_min: 45,
+              /*
+                시간창.
+
+                지연이 몇 분인지는 그 자체로 심각하지 않다. **마감을 넘느냐**가
+                심각하다. 하차지 마감을 도착 예정 뒤 30분~4시간 사이로 흩어
+                놓으면 같은 40분 지연이 어떤 트립에서는 아무 일도 아니고 어떤
+                트립에서는 화주에게 전화할 일이 된다 — 관제 화면이 갈라 보여야
+                하는 것이 그 차이다.
+              */
+              time_window_from: addMinutes(stop.at, stop.type === 'PICKUP' ? -60 : -30),
+              // 마감은 두 갈래다 — 도크 닫는 시각이 빠듯한 곳(3할)과 넉넉한 곳.
+              // 한 가지 폭으로 흩으면 전부 넉넉해져 지연이 아무 데도 안 걸린다.
+              time_window_to: addMinutes(
+                stop.at,
+                stop.type === 'PICKUP' ? 180 : rnd() < 0.35 ? intBetween(25, 75) : intBetween(150, 330),
+              ),
               distance_from_prev_km: i === 0 ? 0 : lane.km,
               duration_from_prev_min: i === 0 ? 0 : lane.min,
               status:
@@ -1140,7 +1288,7 @@ async function main(): Promise<void> {
               tenant_id: tenantId,
               dispatch_no: dispatchNos[tripIndex]!.no,
               trip_id: trip.trip_id,
-              dispatch_date: todayDate(),
+              dispatch_date: dateOnly(startAt),
               dispatch_type: pick(['CONSIGNED', 'CONTRACTED', 'OWN'] as const),
               carrier_id: vinfo.carrierId,
               carrier_name: partnerName.get(vinfo.carrierId)!,
@@ -1166,15 +1314,37 @@ async function main(): Promise<void> {
           // --- 운송실행 -------------------------------------------
           if (['EXECUTING', 'COMPLETED', 'CLOSED'].includes(plan.tripStatus)) {
             const running = plan.tripStatus === 'EXECUTING';
-            const delayMin = running && rnd() < 0.35 ? intBetween(18, 95) : 0;
+            /*
+              지연은 흔하다.
+
+              실제 운송에서 정시 도착률은 좋아야 7할이다. 화면을 지연이 하나
+              뜨는 데이터로 만들어 두면 "지연이 어디까지 번지나" 를 보여주는
+              축이 늘 비어 있게 되고, 그 화면이 무엇을 위한 것인지 알 수 없다.
+              끝난 건에도 지연을 남긴다 — 실적 확정에서 정시율을 따질 때 쓴다.
+            */
+            const delayMin = rnd() < (running ? 0.55 : 0.35) ? intBetween(15, 110) : 0;
             const progress = running ? Number(between(18, 88).toFixed(2)) : 100;
 
-            await prisma.transport_execution.create({
+            /*
+              정차를 먼저 읽는다. 헤더의 completed_stop_count / total_stop_count 를
+              2 로 박아두면 편성으로 정차가 4곳이 된 트립에서 진행률이 거짓이 된다.
+            */
+            const execStops = await prisma.trip_stop.findMany({
+              where: { tenant_id: tenantId, trip_id: trip.trip_id },
+              orderBy: { stop_seq: 'asc' },
+            });
+            const totalStops = execStops.length;
+            // 지금까지 몇 곳을 지났나 — 진행률을 정차 수로 환산한다
+            const doneStops = running
+              ? Math.max(1, Math.min(totalStops - 1, Math.floor((totalStops * progress) / 100)))
+              : totalStops;
+
+            const execution = await prisma.transport_execution.create({
               data: {
                 tenant_id: tenantId,
                 dispatch_id: dispatch.dispatch_id,
                 trip_id: trip.trip_id,
-                execution_date: todayDate(),
+                execution_date: dateOnly(startAt),
                 carrier_id: vinfo.carrierId,
                 vehicle_id: vehicle,
                 driver_id: vinfo.driverId,
@@ -1185,9 +1355,9 @@ async function main(): Promise<void> {
                   ? Number(((lane.km * progress) / 100).toFixed(1))
                   : lane.km,
                 status: running ? pick(['IN_TRANSIT', 'IN_TRANSIT', 'ARRIVED'] as const) : 'COMPLETED',
-                current_stop_seq: running ? 1 : 2,
-                completed_stop_count: running ? 1 : 2,
-                total_stop_count: 2,
+                current_stop_seq: running ? Math.min(doneStops + 1, totalStops) : totalStops,
+                completed_stop_count: doneStops,
+                total_stop_count: totalStops,
                 progress_rate: progress,
                 last_latitude: Number(
                   (from.lat + (to.lat - from.lat) * (progress / 100)).toFixed(7),
@@ -1203,6 +1373,228 @@ async function main(): Promise<void> {
               },
             });
             executionCount += 1;
+
+            /*
+              정차 실적.
+
+              실행 헤더만 있으면 "지금 어디쯤" 은 보이지만 **지연이 어디서
+              생겼고 앞으로 어디까지 번지는지**는 못 보인다. 관제 화면이
+              답해야 하는 것이 그것이므로 정차 단위 실적을 함께 만든다.
+            */
+            // 정차 좌표는 마스터에 없을 수 있다. 없으면 노선 위에 균등 배치한다.
+            const stopLat = (i: number) =>
+              Number((from.lat + ((to.lat - from.lat) * i) / Math.max(1, totalStops - 1)).toFixed(7));
+            const stopLng = (i: number) =>
+              Number((from.lng + ((to.lng - from.lng) * i) / Math.max(1, totalStops - 1)).toFixed(7));
+
+            for (const [si, ts] of execStops.entries()) {
+              const isDone = si < doneStops;
+              const isCurrent = running && si === doneStops;
+              const plannedArr = ts.planned_arrival_at ?? addMinutes(startAt, si * 180);
+              const plannedDep = ts.planned_departure_at ?? addMinutes(plannedArr, 40);
+
+              // 지연은 앞 정차에서 생겨 뒤로 그대로 밀린다. 실제로도 그렇게 움직인다.
+              const stopDelay = isDone ? delayMin : 0;
+              const actualArr = isDone ? addMinutes(plannedArr, stopDelay) : null;
+              const actualDep = isDone ? addMinutes(plannedDep, stopDelay) : null;
+
+              await prisma.execution_stop.create({
+                data: {
+                  tenant_id: tenantId,
+                  execution_id: execution.execution_id,
+                  trip_stop_id: ts.trip_stop_id,
+                  stop_seq: ts.stop_seq,
+                  stop_type: ts.stop_type,
+                  location_id: ts.location_id,
+                  location_name: ts.location_name,
+                  planned_arrival_at: plannedArr,
+                  planned_departure_at: plannedDep,
+                  actual_arrival_at: actualArr,
+                  actual_departure_at: actualDep,
+                  service_start_at: actualArr,
+                  service_end_at: actualDep,
+                  actual_service_min: isDone ? intBetween(20, 70) : null,
+                  delay_minutes: stopDelay,
+                  is_on_time: isDone ? stopDelay <= 10 : null,
+                  arrival_latitude: isDone ? stopLat(si) : null,
+                  arrival_longitude: isDone ? stopLng(si) : null,
+                  is_geofence_verified: isDone,
+                  // 이 칸은 NOT NULL DEFAULT 0 이다. 안 내린 정차는 0 이지 미상이 아니다.
+                  actual_unload_weight_kg:
+                    isDone && ts.stop_type === 'DELIVERY'
+                      ? Number(ts.unload_weight_kg ?? 0)
+                      : 0,
+                  status: isDone ? 'COMPLETED' : isCurrent ? 'ARRIVED' : 'PENDING',
+                },
+              });
+              stopActualCount += 1;
+            }
+
+            // GPS 궤적 — 출발지에서 현재 위치까지 몇 점. 지도에 지나온 길을 그린다.
+            const trailPoints = running ? 12 : 20;
+            for (let g = 0; g <= trailPoints; g += 1) {
+              const t = (g / trailPoints) * (progress / 100);
+              await prisma.gps_log.create({
+                data: {
+                  tenant_id: tenantId,
+                  vehicle_id: vehicle,
+                  driver_id: vinfo.driverId,
+                  execution_id: execution.execution_id,
+                  collected_at: addMinutes(
+                    new Date(),
+                    -Math.round((1 - g / trailPoints) * 180),
+                  ),
+                  latitude: Number((from.lat + (to.lat - from.lat) * t).toFixed(7)),
+                  longitude: Number((from.lng + (to.lng - from.lng) * t).toFixed(7)),
+                  speed_kmh: intBetween(0, 98),
+                  is_ignition_on: true,
+                  source: 'DTG',
+                },
+              });
+              gpsCount += 1;
+            }
+
+            /*
+              늦은 건에는 사유가 붙어 있다. 사유 없는 지연은 관제가 가장
+              답답해하는 것이다.
+
+              유형과 설명을 따로 뽑으면 "차량고장 — 고속도로 정체로 지연"
+              같은 줄이 나온다. 화면을 보는 사람은 그 한 줄에서 데이터를
+              못 믿기 시작하므로, 짝지어 둔 표에서 함께 꺼낸다.
+            */
+            if (delayMin >= 20) {
+              const kind = pick(EXCEPTION_KINDS);
+              // 아직 도로 위인 건은 손이 필요하니 접수 상태로 두고, 끝난
+              // 건은 대개 처리돼 있다. 목록의 상태 필터가 셋 다 의미를
+              // 가지려면 데이터에도 셋이 다 있어야 한다.
+              const status = running
+                ? pick(['REPORTED', 'REPORTED', 'INVESTIGATING'] as const)
+                : pick(['ACTION_TAKEN', 'RESOLVED', 'RESOLVED', 'CLOSED'] as const);
+              const settled = status === 'RESOLVED' || status === 'CLOSED';
+
+              await prisma.transport_exception.create({
+                data: {
+                  tenant_id: tenantId,
+                  exception_no: `EX${todayDate().toISOString().slice(0, 10).replace(/-/g, '')}${String(executionCount).padStart(4, '0')}`,
+                  execution_id: execution.execution_id,
+                  dispatch_id: dispatch.dispatch_id,
+                  vehicle_id: vehicle,
+                  driver_id: vinfo.driverId,
+                  carrier_id: vinfo.carrierId,
+                  exception_type: kind.type,
+                  severity: delayMin >= 75 ? 'HIGH' : delayMin >= 40 ? 'MEDIUM' : 'LOW',
+                  occurred_at: addMinutes(new Date(), -delayMin),
+                  latitude: Number(
+                    (from.lat + (to.lat - from.lat) * (progress / 200)).toFixed(7),
+                  ),
+                  longitude: Number(
+                    (from.lng + (to.lng - from.lng) * (progress / 200)).toFixed(7),
+                  ),
+                  description: kind.description,
+                  action_taken: status === 'REPORTED' ? null : kind.action,
+                  impact_minutes: delayMin,
+                  status,
+                  reported_at: addMinutes(new Date(), -delayMin + 5),
+                  resolved_at: settled ? addMinutes(new Date(), -Math.floor(delayMin / 3)) : null,
+                  closed_at: status === 'CLOSED' ? new Date() : null,
+                },
+              });
+              exceptionCount += 1;
+            }
+
+            /*
+              늦지 않았어도 나는 예외.
+
+              파손·오배송은 지연과 무관하게 터지고, 나중에 정산에서 공제·
+              청구로 이어진다. 지연에서 파생된 예외만 있으면 예외 화면이
+              "지연 목록 두 번째 판" 이 되고, 실제로 돈이 걸리는 종류가
+              한 건도 안 보인다.
+            */
+            // 난수로 뽑으면 고정 시드에서 한 건도 안 나오는 수가 있다.
+            // 이 종류가 화면에 아예 안 보이는 것이 데모에서는 더 나쁘다.
+            if (!running && executionCount % 3 === 1) {
+              const damage = intBetween(2, 9) * 100_000;
+              await prisma.transport_exception.create({
+                data: {
+                  tenant_id: tenantId,
+                  exception_no: `EX${todayDate().toISOString().slice(0, 10).replace(/-/g, '')}${String(executionCount).padStart(4, '0')}D`,
+                  execution_id: execution.execution_id,
+                  dispatch_id: dispatch.dispatch_id,
+                  vehicle_id: vehicle,
+                  driver_id: vinfo.driverId,
+                  carrier_id: vinfo.carrierId,
+                  exception_type: 'CARGO_DAMAGE',
+                  severity: damage >= 600_000 ? 'HIGH' : 'MEDIUM',
+                  occurred_at: addMinutes(endAt, -20),
+                  latitude: to.lat,
+                  longitude: to.lng,
+                  description: '하차 중 파렛트 모서리 눌림, 외박스 파손 확인',
+                  action_taken: '사진 촬영 후 수하처 확인서 수령, 재포장 후 인수',
+                  impact_minutes: intBetween(15, 45),
+                  damage_amount: damage,
+                  liability_party: 'CARRIER',
+                  settlement_impact: true,
+                  status: 'INVESTIGATING',
+                  reported_at: addMinutes(endAt, -10),
+                },
+              });
+              exceptionCount += 1;
+            }
+
+            /*
+              완료 건은 인수증이 남는다 — **오더마다 한 장씩**.
+
+              트립 단위로 한 장만 만들면, 오더 셋을 실은 트립에서 둘은 늘
+              "미도착" 으로 잡혀 수집률이 실제보다 훨씬 나쁘게 나온다.
+              인수증은 화물을 받은 사람이 쓰는 것이므로 오더를 따라간다.
+
+              그중 일부는 일부러 빠뜨린다. 인수증 화면의 본론이 **빠진 것**
+              이므로, 다 들어온 데이터로는 그 화면을 볼 수 없다.
+            */
+            if (!running) {
+              for (const [oi, m] of members.entries()) {
+                // 다섯 중 하나는 아직 안 들어왔다
+                if ((executionCount + oi) % 5 === 2) continue;
+
+                podCount += 1;
+                // 대부분은 정상이고, 가끔 수량이 모자라거나 파손이 있다.
+                // 결과 칸이 늘 '정상' 이면 그 칸을 아무도 안 본다.
+                // 결과와 사유는 짝지어 꺼낸다. 따로 뽑으면 "부분인수 —
+                // 검수 수량 부족" 처럼 서로 안 맞는 줄이 나온다.
+                const abnormal = (executionCount + oi) % 7 === 3;
+                const flaw = abnormal ? pick(POD_FLAWS) : null;
+                const result = flaw?.result ?? 'NORMAL';
+                // 확인은 사람이 하나씩 누르는 일이라 밀린다. 절반쯤 남겨 둬야
+                // '미확인' 필터와 확인 버튼이 화면에서 동작한다.
+                const confirmed = !abnormal && (executionCount + oi) % 3 !== 0;
+                const deliveredAt = addMinutes(endAt, intBetween(-15, 20));
+
+                await prisma.pod.create({
+                  data: {
+                    tenant_id: tenantId,
+                    execution_id: execution.execution_id,
+                    order_id: m.id,
+                    pod_no: `PD${dateOnly(startAt).toISOString().slice(0, 10).replace(/-/g, '')}${String(podCount).padStart(4, '0')}`,
+                    pod_type: pick(['SIGNATURE', 'PHOTO'] as const),
+                    receiver_name: pick(['김주임', '박과장', '이대리', '최반장'] as const),
+                    receiver_relation: '담당자',
+                    delivered_at: deliveredAt,
+                    pod_result: result,
+                    delivered_qty: m.weight,
+                    shortage_qty: result === 'SHORTAGE' ? Math.round(m.weight * 0.05) : 0,
+                    damaged_qty: result === 'DAMAGED' ? Math.round(m.weight * 0.03) : 0,
+                    abnormal_reason: flaw?.reason ?? null,
+                    latitude: to.lat,
+                    longitude: to.lng,
+                    // 지오펜스는 단말이 도착지 반경 안에 있었는지다. 늘 참으로
+                    // 두면 분쟁 때 근거가 되는 이 표시가 아무 뜻도 없어진다.
+                    is_geofence_verified: (executionCount + oi) % 6 !== 4,
+                    is_confirmed: confirmed,
+                    confirmed_at: confirmed ? addMinutes(deliveredAt, intBetween(30, 300)) : null,
+                  },
+                });
+              }
+            }
           }
         }
 
@@ -1212,6 +1604,9 @@ async function main(): Promise<void> {
 
     console.log(
       `편성 ${tripIndex}건 · 배정 ${allocationCount}건 · 배차 ${dispatchCount}건 · 운송실행 ${executionCount}건`,
+    );
+    console.log(
+      `정차실적 ${stopActualCount}건 · GPS ${gpsCount}점 · 예외 ${exceptionCount}건 · 인수증 ${podCount}건`,
     );
     console.log('\n완료. 관제 현황에서 확인하세요.');
   } finally {
