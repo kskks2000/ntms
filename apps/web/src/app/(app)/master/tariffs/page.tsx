@@ -1,6 +1,7 @@
 'use client';
 
 import { Receipt } from 'lucide-react';
+import Link from 'next/link';
 import {
   APPROVAL_STATUS_LABEL,
   RATE_METHOD_LABEL,
@@ -97,17 +98,30 @@ const columns: Column<TariffListItem>[] = [
     key: 'details',
     header: '요율 상세',
     numeric: true,
-    render: (t) =>
-      t.detailCount === 0 ? (
-        <span
-          className="font-medium text-status-warning"
-          title="상세가 없으면 이 운임표로는 금액이 계산되지 않습니다"
-        >
-          없음
-        </span>
-      ) : (
-        t.detailCount.toLocaleString('ko-KR') + '건'
-      ),
+    /*
+      이 칸만 줄 클릭(=수정 서랍)과 다른 곳으로 간다. 상세는 머리와 성격이
+      아주 달라서 — 하나는 계약 조건이고 하나는 금액 규칙이다 — 같은 서랍에
+      넣으면 어느 쪽을 고치는지 헷갈린다. stopPropagation 으로 줄 클릭을 막는다.
+    */
+    render: (t) => (
+      <Link
+        href={`/master/tariffs/${t.rateTableId}`}
+        onClick={(e) => e.stopPropagation()}
+        className={cn(
+          'rounded px-1.5 py-0.5 underline-offset-4 hover:underline',
+          t.detailCount === 0
+            ? 'font-medium text-status-warning'
+            : 'text-content-accent',
+        )}
+        title={
+          t.detailCount === 0
+            ? '상세가 없으면 이 운임표로는 금액이 계산되지 않습니다'
+            : '요율 상세를 편집합니다'
+        }
+      >
+        {t.detailCount === 0 ? '없음' : t.detailCount.toLocaleString('ko-KR') + '건'}
+      </Link>
+    ),
   },
   {
     key: 'min',

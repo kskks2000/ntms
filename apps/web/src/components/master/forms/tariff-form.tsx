@@ -61,7 +61,7 @@ export function TariffForm({
   id: string | null;
   onClose: () => void;
 }) {
-  const { form, options, loading, submitting, formError, submit, isEdit } =
+  const { form, options, loading, submitting, deleting, formError, submit, remove, isEdit } =
     useMasterForm<TariffFormInput>({
       resource: 'tariffs',
       id,
@@ -69,6 +69,7 @@ export function TariffForm({
       schema: tariffFormSchema,
       blank: BLANK as never,
       listKeys: ['master-tariffs'],
+      entityLabel: '운임표',
       onSaved: onClose,
     });
 
@@ -84,6 +85,9 @@ export function TariffForm({
       subtitle={loading ? '불러오는 중…' : '청구와 지급 금액이 이 표에서 나옵니다.'}
       width="md"
       submitting={submitting}
+      deleting={deleting}
+      // 등록 중에는 지울 것이 없다
+      onDelete={isEdit ? remove : undefined}
       error={formError}
       onSubmit={submit}
       submitLabel={isEdit ? '저장' : '등록'}

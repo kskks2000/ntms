@@ -5,12 +5,16 @@ import type {
   LocationFormValues,
   MasterOptions,
   PartnerFormValues,
+  RateDetailBulkValues,
+  RateDetailPage,
+  RateDetailValues,
   RefOption,
   RouteFormValues,
   TariffFormValues,
   VehicleFormValues,
   ZoneFormValues,
 } from '@ntms/shared';
+import { axesOf } from '@ntms/shared';
 import { AppError } from '../common/api-error.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
@@ -674,6 +678,312 @@ export class MasterWriteService {
       return { id: String(row.rate_table_id) };
     });
   }
+  // -------------------------------------------------------------------
+  // 삭제
+  //
+  // 기준정보는 지우는 것이 아니라 **쓰지 않게 두는** 것이 기본이다. 오더 ·
+  // 트립 · 배차 · 정산이 전부 이 행들을 가리키고 있어서, 지우면 지난 기록이
+  // 무엇을 말하는지 알 수 없게 된다.
+  //
+  // 그래서 두 단계로 나눈다.
+  //
+  //   1. 무엇이 이 행을 쓰고 있는지 센다. 하나라도 있으면 거절하고, 어디가
+  //      걸고 있는지 건수까지 알려준다. "삭제할 수 없습니다" 만 던지면
+  //      사용자는 다음에 무엇을 해야 할지 알 수 없다.
+  //   2. 아무도 안 쓰면 지운다. deleted_at 이 있는 테이블은 그 칸을 채우고
+  //      (부분 유니크 인덱스가 deleted_at IS NULL 조건이라 코드가 곧바로
+  //      다시 쓸 수 있게 풀린다), 없는 테이블은 실제로 지운다.
+  // -------------------------------------------------------------------
+
+  async deletePartner(principal: AuthPrincipal, id: string) {
+    return this.run(principal, async (tx) => {
+      const partner_id = await ownedId(tx, principal, 'partner', id);
+      const w = { tenant_id: principal.tenantId };
+      await assertUnused([
+        ['운송오더', tx.transport_order.count({ where: { ...w, OR: [
+          { shipper_id: partner_id }, { consignor_id: partner_id }, { consignee_id: partner_id },
+        ] } })],
+        ['배차', tx.dispatch.count({ where: { ...w, carrier_id: partner_id } })],
+        ['운송사 배정', tx.allocation.count({ where: { ...w, carrier_id: partner_id } })],
+        ['정산', tx.settlement.count({ where: { ...w, partner_id } })],
+        ['차량', tx.vehicle.count({ where: { ...w, carrier_id: partner_id, deleted_at: null } })],
+        ['기사', tx.driver.count({ where: { ...w, carrier_id: partner_id, deleted_at: null } })],
+        ['거점', tx.location.count({ where: { ...w, partner_id, deleted_at: null } })],
+        ['운임표', tx.rate_table.count({ where: { ...w, partner_id, deleted_at: null } })],
+        ['사용자 계정', tx.user_account.count({ where: { ...w, partner_id } })],
+      ]);
+      await tx.business_partner.update({
+        where: { partner_id },
+        data: { deleted_at: new Date(), deleted_by: principal.userId, is_active: false },
+      });
+      return { id };
+    });
+  }
+
+  async deleteVehicle(principal: AuthPrincipal, id: string) {
+    return this.run(principal, async (tx) => {
+      const vehicle_id = await ownedId(tx, principal, 'vehicle', id);
+      const w = { tenant_id: principal.tenantId };
+      await assertUnused([
+        ['배차', tx.dispatch.count({ where: { ...w, vehicle_id } })],
+        ['운송실행', tx.transport_execution.count({ where: { ...w, vehicle_id } })],
+        ['운송실적', tx.transport_actual.count({ where: { ...w, vehicle_id } })],
+        ['정비 이력', tx.vehicle_maintenance.count({ where: { ...w, vehicle_id } })],
+        ['기사 배정', tx.vehicle_driver.count({ where: { ...w, vehicle_id } })],
+      ]);
+      await tx.vehicle.update({
+        where: { vehicle_id },
+        data: { deleted_at: new Date(), deleted_by: principal.userId, is_active: false },
+      });
+      return { id };
+    });
+  }
+
+  async deleteDriver(principal: AuthPrincipal, id: string) {
+    return this.run(principal, async (tx) => {
+      const driver_id = await ownedId(tx, principal, 'driver', id);
+      const w = { tenant_id: principal.tenantId };
+      await assertUnused([
+        ['배차', tx.dispatch.count({ where: { ...w, OR: [
+          { driver_id }, { sub_driver_id: driver_id },
+        ] } })],
+        ['운송실행', tx.transport_execution.count({ where: { ...w, driver_id } })],
+        ['운송실적', tx.transport_actual.count({ where: { ...w, driver_id } })],
+        ['기본 기사로 지정된 차량', tx.vehicle.count({ where: { ...w, default_driver_id: driver_id, deleted_at: null } })],
+        ['사용자 계정', tx.user_account.count({ where: { ...w, driver_id } })],
+      ]);
+      await tx.driver.update({
+        where: { driver_id },
+        data: { deleted_at: new Date(), deleted_by: principal.userId, is_active: false },
+      });
+      return { id };
+    });
+  }
+
+  async deleteLocation(principal: AuthPrincipal, id: string) {
+    return this.run(principal, async (tx) => {
+      const location_id = await ownedId(tx, principal, 'location', id);
+      const w = { tenant_id: principal.tenantId };
+      await assertUnused([
+        ['운송오더', tx.transport_order.count({ where: { ...w, OR: [
+          { from_location_id: location_id }, { to_location_id: location_id },
+        ] } })],
+        ['트립', tx.trip.count({ where: { ...w, OR: [
+          { start_location_id: location_id }, { end_location_id: location_id },
+        ] } })],
+        ['구간(라우트)', tx.distance_master.count({ where: { ...w, OR: [
+          { from_location_id: location_id }, { to_location_id: location_id },
+        ] } })],
+        ['차고지로 지정된 차량', tx.vehicle.count({ where: { ...w, base_location_id: location_id, deleted_at: null } })],
+      ]);
+      await tx.location.update({
+        where: { location_id },
+        data: { deleted_at: new Date(), deleted_by: principal.userId, is_active: false },
+      });
+      return { id };
+    });
+  }
+
+  async deleteZone(principal: AuthPrincipal, id: string) {
+    return this.run(principal, async (tx) => {
+      const zone_id = await ownedId(tx, principal, 'zone', id);
+      const w = { tenant_id: principal.tenantId };
+      await assertUnused([
+        ['거점', tx.location.count({ where: { ...w, zone_id, deleted_at: null } })],
+        ['운송오더', tx.transport_order.count({ where: { ...w, OR: [
+          { from_zone_id: zone_id }, { to_zone_id: zone_id },
+        ] } })],
+        ['운임표 요율 상세', tx.rate_table_detail.count({ where: { ...w, OR: [
+          { from_zone_id: zone_id }, { to_zone_id: zone_id },
+        ] } })],
+      ]);
+      // zone 에는 deleted_at 이 없다. 아무도 안 쓰는 것이 확인됐으므로 실제로 지운다.
+      await tx.zone.delete({ where: { zone_id } });
+      return { id };
+    });
+  }
+
+  async deleteRoute(principal: AuthPrincipal, id: string) {
+    return this.run(principal, async (tx) => {
+      const distance_id = await ownedId(tx, principal, 'route', id);
+      // 구간거리는 계산에 쓰이고 끝난다 — 결과를 가리키는 행이 없다.
+      await tx.distance_master.delete({ where: { distance_id } });
+      return { id };
+    });
+  }
+
+  async deleteTariff(principal: AuthPrincipal, id: string) {
+    return this.run(principal, async (tx) => {
+      const rate_table_id = await ownedId(tx, principal, 'tariff', id);
+      const w = { tenant_id: principal.tenantId };
+      await assertUnused([
+        ['운송사 배정', tx.allocation.count({ where: { ...w, rate_table_id } })],
+        ['정산 상세', tx.settlement_detail.count({ where: { ...w, rate_table_id } })],
+        ['계약', tx.partner_contract.count({ where: { ...w, rate_table_id, deleted_at: null } })],
+      ]);
+      // 요율 상세는 rate_table 에 Cascade 로 걸려 있어 같이 정리된다.
+      await tx.rate_table.update({
+        where: { rate_table_id },
+        data: { deleted_at: new Date(), deleted_by: principal.userId, is_active: false },
+      });
+      return { id };
+    });
+  }
+  // -------------------------------------------------------------------
+  // 요율 상세 — 금액이 실제로 만들어지는 줄들
+  // -------------------------------------------------------------------
+
+  async rateDetails(principal: AuthPrincipal, tariffId: string): Promise<RateDetailPage> {
+    return this.run(principal, async (tx) => {
+      const tenant_id = principal.tenantId;
+      const head = await mustFind(
+        tx.rate_table.findFirst({
+          where: { tenant_id, rate_table_id: toId(tariffId), deleted_at: null },
+          include: { business_partner: { select: { partner_name: true } } },
+        }),
+        '운임표',
+      );
+
+      const [rows, lockedBySettlement] = await Promise.all([
+        tx.rate_table_detail.findMany({
+          where: { tenant_id, rate_table_id: head.rate_table_id },
+          orderBy: [{ priority: 'asc' }, { line_no: 'asc' }],
+        }),
+        tx.settlement_detail.count({
+          where: { tenant_id, rate_table_id: head.rate_table_id },
+        }),
+      ]);
+
+      return {
+        tariff: {
+          id: String(head.rate_table_id),
+          rateTableCode: head.rate_table_code,
+          rateTableName: head.rate_table_name,
+          rateTarget: head.rate_target,
+          rateMethod: head.rate_method,
+          partnerName: head.business_partner?.partner_name ?? null,
+          applyStartDate: dateStr(head.apply_start_date) ?? '',
+          applyEndDate: dateStr(head.apply_end_date),
+          minChargeAmount: num(head.min_charge_amount),
+          status: head.status,
+          isActive: head.is_active,
+        },
+        rows: rows.map((r) => ({
+          lineNo: r.line_no,
+          vehicleTypeId: idOrNull(r.vehicle_type_id),
+          fromZoneId: idOrNull(r.from_zone_id),
+          toZoneId: idOrNull(r.to_zone_id),
+          distanceFrom: num(r.distance_from),
+          distanceTo: num(r.distance_to),
+          weightFrom: num(r.weight_from),
+          weightTo: num(r.weight_to),
+          qtyFrom: num(r.qty_from),
+          qtyTo: num(r.qty_to),
+          stopCountFrom: r.stop_count_from,
+          stopCountTo: r.stop_count_to,
+          baseAmount: num(r.base_amount) ?? 0,
+          unitRate: num(r.unit_rate),
+          minAmount: num(r.min_amount),
+          maxAmount: num(r.max_amount),
+          extraStopAmount: num(r.extra_stop_amount),
+          waitingFreeMin: r.waiting_free_min,
+          waitingRateHour: num(r.waiting_rate_hour),
+          priority: r.priority,
+          remark: r.remark,
+        })),
+        lockedBySettlement,
+      };
+    });
+  }
+
+  /**
+   * 표 전체를 갈아 끼운다.
+   *
+   * 줄 단위로 저장하지 않는 이유는 요율표를 고치는 방식 때문이다 — 구간을
+   * 새로 나누고 단가를 다시 배분하는 일이라, 중간 상태는 대개 말이 안 되는
+   * 운임표다. 그 사이에 계산되는 오더가 있으면 틀린 금액이 나간다.
+   *
+   * 다만 **정산이 이미 참조한 줄이 있으면 거절한다.** settlement_detail 이
+   * rate_detail_id 를 들고 있어서, 지우면 지난 청구서가 어느 요율로
+   * 계산됐는지 답할 수 없게 된다.
+   */
+  async saveRateDetails(
+    principal: AuthPrincipal,
+    tariffId: string,
+    body: RateDetailBulkValues,
+  ) {
+    return this.run(principal, async (tx) => {
+      const tenant_id = principal.tenantId;
+      const rate_table_id = await ownedId(tx, principal, 'tariff', tariffId);
+
+      const head = await mustFind(
+        tx.rate_table.findFirst({
+          where: { tenant_id, rate_table_id },
+          select: { rate_method: true },
+        }),
+        '운임표',
+      );
+
+      const locked = await tx.settlement_detail.count({
+        where: { tenant_id, rate_detail_id: { not: null }, rate_table_id },
+      });
+      if (locked > 0) {
+        throw new AppError(
+          409,
+          'RATE_DETAIL_LOCKED',
+          '정산에 이미 쓰인 요율이 있어 바꿀 수 없습니다. 새 운임표를 만들어 적용기간을 나누세요.',
+          { locked },
+        );
+      }
+
+      // 산정방식이 쓰지 않는 조건 축은 저장하지 않는다. 남겨 두면 매칭에
+      // 조용히 끼어들어, 화면에 보이지도 않는 조건 때문에 금액이 달라진다.
+      const axes = new Set(axesOf(head.rate_method));
+      const keep = (axis: string, value: number | null) => (axes.has(axis as never) ? value : null);
+      const keepRef = (axis: string, value: string | null) =>
+        axes.has(axis as never) ? value : null;
+
+      const rows = await Promise.all(
+        body.rows.map(async (r: RateDetailValues, i: number) => ({
+          tenant_id,
+          rate_table_id,
+          line_no: i + 1,
+          vehicle_type_id: await ownedIdOrNull(
+            tx,
+            principal,
+            'vehicleType',
+            keepRef('vehicleType', r.vehicleTypeId),
+          ),
+          from_zone_id: await ownedIdOrNull(tx, principal, 'zone', keepRef('zonePair', r.fromZoneId)),
+          to_zone_id: await ownedIdOrNull(tx, principal, 'zone', keepRef('zonePair', r.toZoneId)),
+          distance_from: keep('distance', r.distanceFrom),
+          distance_to: keep('distance', r.distanceTo),
+          weight_from: keep('weight', r.weightFrom),
+          weight_to: keep('weight', r.weightTo),
+          qty_from: keep('qty', r.qtyFrom),
+          qty_to: keep('qty', r.qtyTo),
+          stop_count_from: toSmallInt(keep('stopCount', r.stopCountFrom)),
+          stop_count_to: toSmallInt(keep('stopCount', r.stopCountTo)),
+          base_amount: r.baseAmount,
+          unit_rate: r.unitRate,
+          min_amount: r.minAmount,
+          max_amount: r.maxAmount,
+          extra_stop_amount: r.extraStopAmount,
+          waiting_free_min: toSmallInt(r.waitingFreeMin),
+          waiting_rate_hour: r.waitingRateHour,
+          priority: toSmallInt(r.priority) ?? 100,
+          remark: r.remark,
+        })),
+      );
+
+      await tx.rate_table_detail.deleteMany({ where: { tenant_id, rate_table_id } });
+      if (rows.length > 0) {
+        await tx.rate_table_detail.createMany({ data: rows as never });
+      }
+
+      return { count: rows.length };
+    });
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -724,6 +1034,41 @@ function clockStr(value: Date | null): string | null {
 
 function toClock(value: string | null): Date | null {
   return value === null ? null : new Date(`1970-01-01T${value}:00Z`);
+}
+
+/**
+ * 이 기준정보를 쓰고 있는 곳이 있으면 삭제를 막는다.
+ *
+ * 막는 것으로 끝내지 않고 **어디가 몇 건 걸고 있는지** 를 돌려준다.
+ * "삭제할 수 없습니다" 만으로는 사용자가 다음에 무엇을 해야 할지 모른다.
+ */
+async function assertUnused(probes: [string, Promise<number>][]): Promise<void> {
+  const counts = await Promise.all(probes.map(([, promise]) => promise));
+  const blockers = probes
+    .map(([label], i) => ({ label, count: counts[i]! }))
+    .filter((b) => b.count > 0);
+
+  if (blockers.length === 0) return;
+
+  const summary = blockers
+    .map((b) => label(b.label, b.count))
+    .join(' · ');
+  throw new AppError(
+    409,
+    'MASTER_IN_USE',
+    summary + '이 이 항목을 쓰고 있어 삭제할 수 없습니다.',
+    { blockers },
+  );
+}
+
+function label(name: string, count: number): string {
+  return name + ' ' + count.toLocaleString('ko-KR') + '건';
+}
+
+/** SMALLINT 칸. 화면은 숫자 하나로 다루지만 DB 는 범위가 좁다 */
+function toSmallInt(value: number | null): number | null {
+  if (value === null) return null;
+  return Math.max(-32768, Math.min(32767, Math.round(value)));
 }
 
 async function mustFind<T>(promise: Promise<T | null>, label: string): Promise<T> {

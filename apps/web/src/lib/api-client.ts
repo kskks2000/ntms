@@ -34,7 +34,7 @@ export class ApiRequestError extends Error {
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   /** 액세스 토큰. 메모리에만 두므로 호출부가 넘긴다 */
   accessToken?: string | null;

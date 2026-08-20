@@ -63,7 +63,7 @@ export function LocationForm({
   id: string | null;
   onClose: () => void;
 }) {
-  const { form, options, loading, submitting, formError, submit, isEdit } =
+  const { form, options, loading, submitting, deleting, formError, submit, remove, isEdit } =
     useMasterForm<LocationFormInput>({
       resource: 'locations',
       id,
@@ -72,6 +72,7 @@ export function LocationForm({
       blank: BLANK as never,
       // 거점이 바뀌면 라우트 목록의 구간 이름도 따라 바뀐다
       listKeys: ['master-locations', 'master-routes'],
+      entityLabel: '거점',
       onSaved: onClose,
     });
 
@@ -89,6 +90,9 @@ export function LocationForm({
       }
       width="lg"
       submitting={submitting}
+      deleting={deleting}
+      // 등록 중에는 지울 것이 없다
+      onDelete={isEdit ? remove : undefined}
       error={formError}
       onSubmit={submit}
       submitLabel={isEdit ? '저장' : '등록'}

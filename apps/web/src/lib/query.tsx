@@ -74,7 +74,7 @@ export function useApiQuery<T>(
  * 함께 달라지는데, 고친 행만 갈아 끼우면 그 숫자가 옛 값으로 남는다.
  */
 export function useApiMutation<TResult, TBody>(
-  build: (body: TBody) => { path: string; method: 'POST' | 'PATCH' | 'DELETE' },
+  build: (body: TBody) => { path: string; method: 'POST' | 'PUT' | 'PATCH' | 'DELETE' },
   options?: {
     /** 낡은 것으로 표시할 질의 키 접두사 */
     invalidate?: readonly (readonly unknown[])[];

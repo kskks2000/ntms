@@ -54,7 +54,7 @@ export function RouteForm({
   id: string | null;
   onClose: () => void;
 }) {
-  const { form, options, loading, submitting, formError, submit, isEdit } =
+  const { form, options, loading, submitting, deleting, formError, submit, remove, isEdit } =
     useMasterForm<RouteFormInput>({
       resource: 'routes',
       id,
@@ -62,6 +62,7 @@ export function RouteForm({
       schema: routeFormSchema,
       blank: BLANK as never,
       listKeys: ['master-routes'],
+      entityLabel: '구간',
       onSaved: onClose,
     });
 
@@ -90,6 +91,9 @@ export function RouteForm({
       }
       width="sm"
       submitting={submitting}
+      deleting={deleting}
+      // 등록 중에는 지울 것이 없다
+      onDelete={isEdit ? remove : undefined}
       error={formError}
       onSubmit={submit}
       submitLabel={isEdit ? '저장' : '등록'}

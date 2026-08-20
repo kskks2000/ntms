@@ -293,6 +293,14 @@
   }
 }
 
+/* 알림이 아래에서 살짝 올라온다. 미끄러져 들어와야 "새로 생긴 것" 으로 읽힌다 */
+@keyframes ntms-toast-in {
+  from {
+    transform: translateY(0.5rem);
+    opacity: 0;
+  }
+}
+
 /* 기준정보 서랍이 오른쪽에서 밀려 나온다. 어디서 왔는지 보여야 닫을 곳도 안다 */
 @keyframes ntms-drawer-in {
   from {

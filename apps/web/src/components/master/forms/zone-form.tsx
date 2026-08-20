@@ -33,7 +33,7 @@ export function ZoneForm({
   id: string | null;
   onClose: () => void;
 }) {
-  const { form, loading, submitting, formError, submit, isEdit } =
+  const { form, loading, submitting, deleting, formError, submit, remove, isEdit } =
     useMasterForm<ZoneFormInput>({
       resource: 'zones',
       id,
@@ -42,6 +42,7 @@ export function ZoneForm({
       blank: BLANK as never,
       // 권역 이름은 거점 목록의 권역 열에도 실린다
       listKeys: ['master-locations'],
+      entityLabel: '권역',
       onSaved: onClose,
     });
 
@@ -56,6 +57,9 @@ export function ZoneForm({
       subtitle={loading ? '불러오는 중…' : '거점을 묶는 단위입니다. 권역별 운임이 이 묶음을 씁니다.'}
       width="sm"
       submitting={submitting}
+      deleting={deleting}
+      // 등록 중에는 지울 것이 없다
+      onDelete={isEdit ? remove : undefined}
       error={formError}
       onSubmit={submit}
       submitLabel={isEdit ? '저장' : '등록'}

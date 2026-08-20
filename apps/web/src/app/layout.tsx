@@ -3,6 +3,7 @@ import { IBM_Plex_Mono, IBM_Plex_Sans_KR } from 'next/font/google';
 import type { ReactNode } from 'react';
 import { AuthProvider } from '@/lib/auth-context';
 import { QueryProvider } from '@/lib/query';
+import { ToastProvider } from '@/components/ui/toast';
 import './globals.css';
 
 /**
@@ -65,7 +66,9 @@ export default function RootLayout({
     <html lang="ko" className={`${sans.variable} ${mono.variable}`}>
       <body>
         <QueryProvider>
-          <AuthProvider>{children}</AuthProvider>
+          <AuthProvider>
+            <ToastProvider>{children}</ToastProvider>
+          </AuthProvider>
         </QueryProvider>
       </body>
     </html>

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put } from '@nestjs/common';
 import { Query } from '@nestjs/common';
 import { z } from 'zod';
 import {
@@ -6,6 +6,7 @@ import {
   locationFormSchema,
   partnerFormSchema,
   routeFormSchema,
+  rateDetailBulkSchema,
   tariffFormSchema,
   vehicleFormSchema,
   zoneFormSchema,
@@ -99,9 +100,12 @@ export class MasterController {
   // -------------------------------------------------------------------
   // 등록 · 수정
   //
-  // 경로를 자원별로 세 개씩(상세 · 등록 · 수정) 둔다. 하나의 저장 창구에
+  // 경로를 자원별로 넷씩(상세 · 등록 · 수정 · 삭제) 둔다. 하나의 저장 창구에
   // 자원 이름을 인자로 넘기는 방식이 짧아 보이지만, 그러면 본문 스키마를
   // 런타임에 골라야 해서 타입이 끊긴다.
+  //
+  // 삭제는 자원마다 "무엇이 이걸 쓰고 있나" 를 세는 목록이 전부 다르다.
+  // 그것까지 한 창구로 묶으면 조건문 덩어리가 된다.
   // -------------------------------------------------------------------
 
   @Get('partners/:id')
@@ -126,6 +130,11 @@ export class MasterController {
     return this.write.savePartner(user, id, dto);
   }
 
+  @Delete('partners/:id')
+  deletePartner(@CurrentUser() user: AuthPrincipal, @Param('id') id: string) {
+    return this.write.deletePartner(user, id);
+  }
+
   @Get('vehicles/:id')
   vehicleDetail(@CurrentUser() user: AuthPrincipal, @Param('id') id: string) {
     return this.write.vehicleDetail(user, id);
@@ -146,6 +155,11 @@ export class MasterController {
     @Body(new ZodValidationPipe(vehicleFormSchema)) dto: VehicleBody,
   ) {
     return this.write.saveVehicle(user, id, dto);
+  }
+
+  @Delete('vehicles/:id')
+  deleteVehicle(@CurrentUser() user: AuthPrincipal, @Param('id') id: string) {
+    return this.write.deleteVehicle(user, id);
   }
 
   @Get('drivers/:id')
@@ -170,6 +184,11 @@ export class MasterController {
     return this.write.saveDriver(user, id, dto);
   }
 
+  @Delete('drivers/:id')
+  deleteDriver(@CurrentUser() user: AuthPrincipal, @Param('id') id: string) {
+    return this.write.deleteDriver(user, id);
+  }
+
   @Get('locations/:id')
   locationDetail(@CurrentUser() user: AuthPrincipal, @Param('id') id: string) {
     return this.write.locationDetail(user, id);
@@ -190,6 +209,11 @@ export class MasterController {
     @Body(new ZodValidationPipe(locationFormSchema)) dto: LocationBody,
   ) {
     return this.write.saveLocation(user, id, dto);
+  }
+
+  @Delete('locations/:id')
+  deleteLocation(@CurrentUser() user: AuthPrincipal, @Param('id') id: string) {
+    return this.write.deleteLocation(user, id);
   }
 
   @Get('zones/:id')
@@ -214,6 +238,11 @@ export class MasterController {
     return this.write.saveZone(user, id, dto);
   }
 
+  @Delete('zones/:id')
+  deleteZone(@CurrentUser() user: AuthPrincipal, @Param('id') id: string) {
+    return this.write.deleteZone(user, id);
+  }
+
   @Get('routes/:id')
   routeDetail(@CurrentUser() user: AuthPrincipal, @Param('id') id: string) {
     return this.write.routeDetail(user, id);
@@ -234,6 +263,11 @@ export class MasterController {
     @Body(new ZodValidationPipe(routeFormSchema)) dto: RouteBody,
   ) {
     return this.write.saveRoute(user, id, dto);
+  }
+
+  @Delete('routes/:id')
+  deleteRoute(@CurrentUser() user: AuthPrincipal, @Param('id') id: string) {
+    return this.write.deleteRoute(user, id);
   }
 
   @Get('tariffs/:id')
@@ -257,6 +291,28 @@ export class MasterController {
   ) {
     return this.write.saveTariff(user, id, dto);
   }
+
+  @Delete('tariffs/:id')
+  deleteTariff(@CurrentUser() user: AuthPrincipal, @Param('id') id: string) {
+    return this.write.deleteTariff(user, id);
+  }
+
+  // 요율 상세는 운임표에 딸린 것이라 경로도 그 아래에 둔다.
+  // 저장은 줄 단위가 아니라 표 전체를 갈아 끼운다 — 이유는 서비스에 적어 두었다.
+
+  @Get('tariffs/:id/rates')
+  rateDetails(@CurrentUser() user: AuthPrincipal, @Param('id') id: string) {
+    return this.write.rateDetails(user, id);
+  }
+
+  @Put('tariffs/:id/rates')
+  saveRateDetails(
+    @CurrentUser() user: AuthPrincipal,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(rateDetailBulkSchema)) dto: RateBulkBody,
+  ) {
+    return this.write.saveRateDetails(user, id, dto);
+  }
 }
 
 // 파이프를 통과한 뒤의 값 — 기본값과 변환이 이미 적용된 모양이다
@@ -267,3 +323,4 @@ type LocationBody = z.output<typeof locationFormSchema>;
 type ZoneBody = z.output<typeof zoneFormSchema>;
 type RouteBody = z.output<typeof routeFormSchema>;
 type TariffBody = z.output<typeof tariffFormSchema>;
+type RateBulkBody = z.output<typeof rateDetailBulkSchema>;

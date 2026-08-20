@@ -29,6 +29,12 @@ const button = cva(
           'bg-surface-card text-content-primary border border-line-field',
           'hover:bg-surface-sunken active:bg-surface-sunken',
         ],
+        // 되돌릴 수 없는 동작 하나에만 쓴다. 취소·저장과 나란히 놓였을 때
+        // 색만으로 "이건 성격이 다르다" 가 읽혀야 한다.
+        danger: [
+          'bg-status-danger text-white',
+          'hover:brightness-110 active:brightness-95',
+        ],
         ghost: [
           'bg-transparent text-content-secondary',
           'hover:bg-surface-sunken hover:text-content-primary',

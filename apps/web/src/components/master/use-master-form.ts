@@ -7,12 +7,13 @@ import type { MasterOptions } from '@ntms/shared';
 import type { ZodTypeAny } from 'zod';
 import { ApiRequestError } from '@/lib/api-client';
 import { useApiMutation, useApiQuery } from '@/lib/query';
+import { useToast } from '@/components/ui/toast';
 
 /**
  * 기준정보 폼 일곱 개가 같이 쓰는 배선.
  *
- * 화면마다 다른 것은 **칸의 구성뿐**이다. 불러오기 · 저장 · 오류를 필드에
- * 매다는 절차는 전부 같으므로 여기서 한 번만 쓴다. 폼마다 따로 쓰면
+ * 화면마다 다른 것은 **칸의 구성뿐**이다. 불러오기 · 저장 · 삭제 · 오류를
+ * 필드에 매다는 절차는 전부 같으므로 여기서 한 번만 쓴다. 폼마다 따로 쓰면
  * "서버가 준 필드 오류를 화면에 붙이는" 부분이 일곱 갈래로 갈라지고,
  * 그중 몇은 조용히 빠진다.
  */
@@ -22,9 +23,12 @@ export interface MasterFormState<TValues extends FieldValues> {
   /** 수정 대상을 아직 불러오는 중 */
   loading: boolean;
   submitting: boolean;
+  deleting: boolean;
   /** 어느 칸에도 매달 수 없는 오류 */
   formError: string | null;
   submit: () => void;
+  /** 수정 중일 때만 쓴다. 등록 화면에는 지울 것이 없다 */
+  remove: () => void;
   isEdit: boolean;
 }
 
@@ -35,6 +39,7 @@ export function useMasterForm<TValues extends FieldValues>({
   schema,
   blank,
   listKeys,
+  entityLabel,
   onSaved,
 }: {
   /** `partners` · `vehicles` 처럼 API 경로의 자원 이름 */
@@ -52,10 +57,13 @@ export function useMasterForm<TValues extends FieldValues>({
    * 지금 보고 있는 목록만 갱신하면 옆 화면으로 옮겼을 때 옛 값이 남는다.
    */
   listKeys: readonly string[];
+  /** 알림 문구에 쓰는 이름 — "차량을 등록했습니다" */
+  entityLabel: string;
   onSaved: () => void;
 }): MasterFormState<TValues> {
   const isEdit = id !== null;
   const [formError, setFormError] = useState<string | null>(null);
+  const toast = useToast();
 
   const form = useForm<TValues>({
     resolver: zodResolver(schema),
@@ -75,14 +83,32 @@ export function useMasterForm<TValues extends FieldValues>({
     { enabled: open && isEdit, staleTime: 0, gcTime: 0 },
   );
 
+  const invalidate = [...listKeys.map((k) => [k] as const), ['master-options']];
+
   const save = useApiMutation<{ id: string }, TValues>(
     () => ({
       path: isEdit ? `/master/${resource}/${id}` : `/master/${resource}`,
       method: isEdit ? 'PATCH' : 'POST',
     }),
     {
-      invalidate: [...listKeys.map((k) => [k] as const), ['master-options']],
-      onSuccess: () => onSaved(),
+      invalidate,
+      onSuccess: () => {
+        // 등록은 목록 총계가 하나 늘어 눈에 띄지만, 값만 고친 수정은 화면이
+        // 거의 그대로다. 저장됐다는 사실을 말로 한 번 해 준다.
+        toast.success(`${entityLabel}을(를) ${isEdit ? '저장' : '등록'}했습니다`);
+        onSaved();
+      },
+    },
+  );
+
+  const del = useApiMutation<{ id: string }, void>(
+    () => ({ path: `/master/${resource}/${id}`, method: 'DELETE' }),
+    {
+      invalidate,
+      onSuccess: () => {
+        toast.success(`${entityLabel}을(를) 삭제했습니다`);
+        onSaved();
+      },
     },
   );
 
@@ -127,13 +153,29 @@ export function useMasterForm<TValues extends FieldValues>({
     }
   });
 
+  const remove = () => {
+    setFormError(null);
+    del.mutateAsync().catch((error: unknown) => {
+      // 삭제 거절은 대개 "무엇이 이걸 쓰고 있다" 는 소식이다. 서랍 안 배너와
+      // 알림 양쪽에 띄운다 — 배너는 서랍을 닫으면 사라지지만 알림은 남는다.
+      const message =
+        error instanceof ApiRequestError
+          ? error.message
+          : '삭제하지 못했습니다. 잠시 후 다시 시도해 주세요.';
+      setFormError(message);
+      toast.danger('삭제하지 못했습니다', message);
+    });
+  };
+
   return {
     form,
     options: options.data,
     loading: isEdit && detail.isLoading,
     submitting: save.isPending || form.formState.isSubmitting,
+    deleting: del.isPending,
     formError,
     submit,
+    remove,
     isEdit,
   };
 }

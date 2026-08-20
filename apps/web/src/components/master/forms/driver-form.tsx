@@ -56,7 +56,7 @@ export function DriverForm({
   id: string | null;
   onClose: () => void;
 }) {
-  const { form, options, loading, submitting, formError, submit, isEdit } =
+  const { form, options, loading, submitting, deleting, formError, submit, remove, isEdit } =
     useMasterForm<DriverFormInput>({
       resource: 'drivers',
       id,
@@ -64,6 +64,7 @@ export function DriverForm({
       schema: driverFormSchema,
       blank: BLANK as never,
       listKeys: ['master-drivers'],
+      entityLabel: '기사',
       onSaved: onClose,
     });
 
@@ -81,6 +82,9 @@ export function DriverForm({
       }
       width="md"
       submitting={submitting}
+      deleting={deleting}
+      // 등록 중에는 지울 것이 없다
+      onDelete={isEdit ? remove : undefined}
       error={formError}
       onSubmit={submit}
       submitLabel={isEdit ? '저장' : '등록'}

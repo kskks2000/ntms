@@ -57,7 +57,7 @@ export function VehicleForm({
   id: string | null;
   onClose: () => void;
 }) {
-  const { form, options, loading, submitting, formError, submit, isEdit } =
+  const { form, options, loading, submitting, deleting, formError, submit, remove, isEdit } =
     useMasterForm<VehicleFormInput>({
       resource: 'vehicles',
       id,
@@ -65,6 +65,7 @@ export function VehicleForm({
       schema: vehicleFormSchema,
       blank: BLANK as never,
       listKeys: ['master-vehicles'],
+      entityLabel: '차량',
       onSaved: onClose,
     });
 
@@ -79,6 +80,9 @@ export function VehicleForm({
       subtitle={loading ? '불러오는 중…' : '보험과 검사가 살아 있어야 배차할 수 있습니다.'}
       width="md"
       submitting={submitting}
+      deleting={deleting}
+      // 등록 중에는 지울 것이 없다
+      onDelete={isEdit ? remove : undefined}
       error={formError}
       onSubmit={submit}
       submitLabel={isEdit ? '저장' : '등록'}

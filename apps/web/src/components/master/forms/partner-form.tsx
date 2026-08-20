@@ -77,7 +77,7 @@ export function PartnerForm({
   labels: { entity: string; nameLabel: string };
   onClose: () => void;
 }) {
-  const { form, loading, submitting, formError, submit, isEdit } =
+  const { form, loading, submitting, deleting, formError, submit, remove, isEdit } =
     useMasterForm<PartnerFormInput>({
       resource: 'partners',
       id,
@@ -90,6 +90,7 @@ export function PartnerForm({
       } as never,
       // 한 회사를 고치면 세 목록이 같이 달라진다
       listKeys: ['master-shippers', 'master-carriers', 'master-partners'],
+      entityLabel: labels.entity,
       onSaved: onClose,
     });
 
@@ -108,6 +109,9 @@ export function PartnerForm({
       }
       width="md"
       submitting={submitting}
+      deleting={deleting}
+      // 등록 중에는 지울 것이 없다
+      onDelete={isEdit ? remove : undefined}
       error={formError}
       onSubmit={submit}
       submitLabel={isEdit ? '저장' : '등록'}

@@ -1,7 +1,7 @@
 'use client';
 
-import { X } from 'lucide-react';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { Trash2, X } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
@@ -29,8 +29,10 @@ export function MasterFormDrawer({
   subtitle,
   width = 'md',
   submitting = false,
+  deleting = false,
   error,
   onSubmit,
+  onDelete,
   submitLabel,
   children,
 }: {
@@ -40,12 +42,26 @@ export function MasterFormDrawer({
   subtitle?: string;
   width?: 'sm' | 'md' | 'lg';
   submitting?: boolean;
+  deleting?: boolean;
   /** 필드에 매달 수 없는 오류 (코드 중복 · 네트워크 …) */
   error?: string | null;
   onSubmit: () => void;
+  /** 주면 삭제 단추가 생긴다. 수정일 때만 넘긴다 — 등록에는 지울 것이 없다 */
+  onDelete?: () => void;
   submitLabel: string;
   children: ReactNode;
 }) {
+  /*
+    삭제는 두 걸음으로 받는다.
+
+    window.confirm 을 쓰지 않는 이유가 둘이다. 하나는 생김새가 이 화면과
+    따로 놀아서 "이게 우리 화면 맞나" 싶게 만든다는 것이고, 다른 하나는
+    브라우저 기본 대화상자가 페이지 전체를 멈춰 세운다는 것이다.
+
+    대신 바닥 줄이 그 자리에서 확인 줄로 바뀐다. 무엇을 지우는지가 위에
+    그대로 보이는 채로 묻는 것이 별도 창보다 낫다.
+  */
+  const [confirming, setConfirming] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   /** 서랍을 열기 직전에 초점이 있던 곳. 닫을 때 그리로 돌려준다 */
   const openerRef = useRef<HTMLElement | null>(null);
@@ -120,6 +136,11 @@ export function MasterFormDrawer({
     };
   }, [open]);
 
+  // 서랍을 닫았다 다시 열면 확인 줄이 남아 있으면 안 된다
+  useEffect(() => {
+    if (!open) setConfirming(false);
+  }, [open]);
+
   if (!open) return null;
 
   return (
@@ -191,13 +212,54 @@ export function MasterFormDrawer({
             저장 단추는 아래에 고정한다. 긴 폼에서 맨 아래까지 굴려 내려가야
             저장할 수 있으면, 위쪽 칸 하나만 고친 사람도 끝까지 내려가야 한다.
           */}
-          <footer className="flex items-center justify-end gap-2 border-t border-line-subtle bg-surface-sunken/50 px-6 py-3.5">
-            <Button type="button" variant="secondary" onClick={onClose} disabled={submitting}>
-              취소
-            </Button>
-            <Button type="submit" loading={submitting} loadingLabel="저장하는 중">
-              {submitLabel}
-            </Button>
+          <footer className="flex items-center gap-2 border-t border-line-subtle bg-surface-sunken/50 px-6 py-3.5">
+            {confirming ? (
+              <>
+                <p className="min-w-0 flex-1 text-caption text-content-secondary">
+                  삭제하면 목록에서 사라집니다. 지난 기록이 이 항목을 쓰고 있으면
+                  삭제되지 않습니다.
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => setConfirming(false)}
+                  disabled={deleting}
+                >
+                  취소
+                </Button>
+                <Button
+                  type="button"
+                  variant="danger"
+                  loading={deleting}
+                  loadingLabel="삭제하는 중"
+                  onClick={onDelete}
+                >
+                  삭제
+                </Button>
+              </>
+            ) : (
+              <>
+                {onDelete && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => setConfirming(true)}
+                    disabled={submitting}
+                    className="text-status-danger hover:bg-status-danger-surface hover:text-status-danger"
+                    leadingIcon={<Trash2 size={15} strokeWidth={1.75} aria-hidden="true" />}
+                  >
+                    삭제
+                  </Button>
+                )}
+                <div className="flex-1" />
+                <Button type="button" variant="secondary" onClick={onClose} disabled={submitting}>
+                  취소
+                </Button>
+                <Button type="submit" loading={submitting} loadingLabel="저장하는 중">
+                  {submitLabel}
+                </Button>
+              </>
+            )}
           </footer>
         </form>
       </div>
