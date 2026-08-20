@@ -1,11 +1,15 @@
 'use client';
 
-import { MapPin } from 'lucide-react';
+import { MapPin, Plus } from 'lucide-react';
+import { useState } from 'react';
 import { LOCATION_TYPE_LABEL, type LocationListItem, type ZoneSummary } from '@ntms/shared';
 import { MasterPage } from '@/components/master/master-page';
 import { Panel } from '@/components/tms/panels';
 import type { Column } from '@/components/tms/data-table';
 import { cn } from '@/lib/cn';
+import { LocationForm } from '@/components/master/forms/location-form';
+import { ZoneForm } from '@/components/master/forms/zone-form';
+import { Button } from '@/components/ui/button';
 
 /**
  * 상하차지 · 권역.
@@ -126,6 +130,12 @@ function Tag({
 }
 
 export default function LocationsPage() {
+  /*
+    권역은 거점 옆에 붙은 작은 마스터다. 화면을 따로 두면 거점 하나 넣으려다
+    권역이 없는 것을 발견할 때마다 화면을 옮겨야 한다. 여기서 바로 만든다.
+  */
+  const [zoneEdit, setZoneEdit] = useState<{ id: string | null } | null>(null);
+
   return (
     <MasterPage<LocationListItem>
       eyebrow="Master"
@@ -140,35 +150,62 @@ export default function LocationsPage() {
       emptyTitle="등록된 거점이 없습니다"
       emptyDescription="상하차지를 등록해야 오더의 구간과 거리를 잡을 수 있습니다."
       createLabel="거점 등록"
+      renderForm={({ open, id, onClose }) => (
+        <LocationForm open={open} id={id} onClose={onClose} />
+      )}
       aside={(data) => {
         const zones = (data as unknown as { zones?: ZoneSummary[] } | undefined)?.zones;
         return (
-          <Panel title="권역" subtitle={zones ? `${zones.length}개` : undefined}>
-            {zones && zones.length > 0 ? (
-              <ul className="divide-y divide-line-subtle">
-                {zones.map((z) => (
-                  <li
-                    key={z.zoneId}
-                    className="flex items-baseline gap-2 px-4 py-2.5"
-                  >
-                    <span className="tabular text-caption text-content-tertiary">
-                      {z.zoneCode}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-body text-content-primary">
-                      {z.zoneName}
-                    </span>
-                    <span className="tabular shrink-0 text-caption text-content-secondary">
-                      {z.locationCount}곳
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="px-4 py-6 text-center text-caption text-content-tertiary">
-                등록된 권역이 없습니다
-              </p>
-            )}
-          </Panel>
+          <>
+            <Panel
+              title="권역"
+              subtitle={zones ? `${zones.length}개` : undefined}
+              action={
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setZoneEdit({ id: null })}
+                  leadingIcon={<Plus size={14} strokeWidth={2} aria-hidden="true" />}
+                >
+                  권역
+                </Button>
+              }
+            >
+              {zones && zones.length > 0 ? (
+                <ul className="divide-y divide-line-subtle">
+                  {zones.map((z) => (
+                    <li key={z.zoneId}>
+                      <button
+                        type="button"
+                        onClick={() => setZoneEdit({ id: z.zoneId })}
+                        className="flex w-full items-baseline gap-2 px-4 py-2.5 text-left transition-colors hover:bg-surface-sunken"
+                      >
+                        <span className="tabular text-caption text-content-tertiary">
+                          {z.zoneCode}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-body text-content-primary">
+                          {z.zoneName}
+                        </span>
+                        <span className="tabular shrink-0 text-caption text-content-secondary">
+                          {z.locationCount}곳
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="px-4 py-6 text-center text-caption text-content-tertiary">
+                  등록된 권역이 없습니다
+                </p>
+              )}
+            </Panel>
+
+            <ZoneForm
+              open={zoneEdit !== null}
+              id={zoneEdit?.id ?? null}
+              onClose={() => setZoneEdit(null)}
+            />
+          </>
         );
       }}
     />

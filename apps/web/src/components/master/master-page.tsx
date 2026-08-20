@@ -55,6 +55,7 @@ export function MasterPage<T>({
   createLabel,
   extraStats,
   aside,
+  renderForm,
 }: {
   eyebrow: string;
   title: string;
@@ -80,12 +81,32 @@ export function MasterPage<T>({
   extraStats?: (data: MasterResponse<T> | undefined) => ReactNode;
   /** 표 옆에 붙는 것 (권역 목록 등) */
   aside?: (data: MasterResponse<T> | undefined) => ReactNode;
+  /**
+   * 등록 · 수정 서랍.
+   *
+   * `id` 가 null 이면 등록, 값이 있으면 그 행의 수정이다. 화면이 서랍을
+   * 직접 그리지 않고 여기서 여닫는 이유는, 어느 화면에서든 "등록 단추 ·
+   * 행 클릭 · 빈 목록의 단추" 세 곳이 모두 같은 서랍을 열어야 하기
+   * 때문이다. 화면마다 이으면 셋 중 하나가 빠진다.
+   */
+  renderForm?: (args: {
+    open: boolean;
+    id: string | null;
+    onClose: () => void;
+  }) => ReactNode;
 }) {
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(50);
   const [keyword, setKeyword] = useState('');
   const [keywordInput, setKeywordInput] = useState('');
   const [filter, setFilter] = useState('');
+
+  /**
+   * 서랍 상태. `null` 은 닫힘, `{ id: null }` 은 등록, `{ id }` 는 수정이다.
+   * "열림" 과 "무엇을 열었나" 를 한 값으로 두면 둘이 어긋날 수 없다.
+   */
+  const [editing, setEditing] = useState<{ id: string | null } | null>(null);
+  const closeForm = () => setEditing(null);
 
   const path = useMemo(() => {
     const p = new URLSearchParams({ page: String(page), size: String(size) });
@@ -111,6 +132,9 @@ export function MasterPage<T>({
         columns={columns}
         rows={data?.items ?? []}
         getRowKey={getRowKey}
+        // 줄을 누르면 그 줄을 고친다. 별도의 "수정" 열을 세우면 표가 한 칸
+        // 좁아지는데, 기준정보에서 줄을 누르는 목적은 거의 언제나 수정이다.
+        onRowClick={renderForm ? (row) => setEditing({ id: getRowKey(row) }) : undefined}
         loading={query.isLoading}
         empty={
           <EmptyState
@@ -125,7 +149,10 @@ export function MasterPage<T>({
                   조건 지우기
                 </Button>
               ) : (
-                <Button leadingIcon={<Plus size={16} strokeWidth={1.75} aria-hidden="true" />}>
+                <Button
+                  onClick={() => setEditing({ id: null })}
+                  leadingIcon={<Plus size={16} strokeWidth={1.75} aria-hidden="true" />}
+                >
                   {createLabel}
                 </Button>
               )
@@ -169,7 +196,10 @@ export function MasterPage<T>({
             >
               내려받기
             </Button>
-            <Button leadingIcon={<Plus size={16} strokeWidth={1.75} aria-hidden="true" />}>
+            <Button
+              onClick={() => setEditing({ id: null })}
+              leadingIcon={<Plus size={16} strokeWidth={1.75} aria-hidden="true" />}
+            >
               {createLabel}
             </Button>
           </>
@@ -273,6 +303,12 @@ export function MasterPage<T>({
         ) : (
           table
         )}
+
+        {renderForm?.({
+          open: editing !== null,
+          id: editing?.id ?? null,
+          onClose: closeForm,
+        })}
       </div>
     </>
   );

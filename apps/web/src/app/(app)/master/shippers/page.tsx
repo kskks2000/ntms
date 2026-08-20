@@ -4,6 +4,7 @@ import { Building2 } from 'lucide-react';
 import type { PartnerListItem } from '@ntms/shared';
 import { MasterPage } from '@/components/master/master-page';
 import { shipperColumns } from '@/components/master/partner-columns';
+import { PartnerForm } from '@/components/master/forms/partner-form';
 
 /** 화주 — 물동량을 맡기는 쪽. 이번 달 얼마나 맡겼는지가 첫 질문이다 */
 export default function ShippersPage() {
@@ -22,6 +23,15 @@ export default function ShippersPage() {
       emptyTitle="등록된 화주가 없습니다"
       emptyDescription="화주를 등록하면 오더를 접수하고 매출 정산을 걸 수 있습니다."
       createLabel="화주 등록"
+      renderForm={({ open, id, onClose }) => (
+        <PartnerForm
+          open={open}
+          id={id}
+          preset="shipper"
+          labels={{ entity: '화주', nameLabel: '화주명' }}
+          onClose={onClose}
+        />
+      )}
     />
   );
 }

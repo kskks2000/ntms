@@ -4,6 +4,7 @@ import { Contact } from 'lucide-react';
 import type { PartnerListItem } from '@ntms/shared';
 import { MasterPage } from '@/components/master/master-page';
 import { partnerColumns } from '@/components/master/partner-columns';
+import { PartnerForm } from '@/components/master/forms/partner-form';
 
 /**
  * 거래처 — 화주 · 운송사 · 수하처를 통틀어 본다.
@@ -31,6 +32,15 @@ export default function PartnersPage() {
       emptyTitle="등록된 거래처가 없습니다"
       emptyDescription="거래처를 등록하면 화주 · 운송사 · 수하처로 지정할 수 있습니다."
       createLabel="거래처 등록"
+      renderForm={({ open, id, onClose }) => (
+        <PartnerForm
+          open={open}
+          id={id}
+          preset="none"
+          labels={{ entity: '거래처', nameLabel: '거래처명' }}
+          onClose={onClose}
+        />
+      )}
     />
   );
 }

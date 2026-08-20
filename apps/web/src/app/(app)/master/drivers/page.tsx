@@ -7,6 +7,7 @@ import { ValidityMeter } from '@/components/master/validity-meter';
 import { StatusChip } from '@/components/tms/status-chip';
 import type { Column } from '@/components/tms/data-table';
 import { cn } from '@/lib/cn';
+import { DriverForm } from '@/components/master/forms/driver-form';
 
 /**
  * 기사.
@@ -130,6 +131,9 @@ export default function DriversPage() {
       emptyTitle="등록된 기사가 없습니다"
       emptyDescription="기사를 등록해야 배차 지시를 보낼 수 있습니다."
       createLabel="기사 등록"
+      renderForm={({ open, id, onClose }) => (
+        <DriverForm open={open} id={id} onClose={onClose} />
+      )}
     />
   );
 }

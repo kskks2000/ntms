@@ -12,6 +12,7 @@ import { ValidityMeter } from '@/components/master/validity-meter';
 import { StatusChip } from '@/components/tms/status-chip';
 import type { Column } from '@/components/tms/data-table';
 import { cn } from '@/lib/cn';
+import { TariffForm } from '@/components/master/forms/tariff-form';
 
 /**
  * 단가 (운임표).
@@ -166,6 +167,9 @@ export default function TariffsPage() {
       emptyTitle="등록된 운임표가 없습니다"
       emptyDescription="운임표를 등록해야 오더 금액과 정산 금액을 계산할 수 있습니다."
       createLabel="운임표 등록"
+      renderForm={({ open, id, onClose }) => (
+        <TariffForm open={open} id={id} onClose={onClose} />
+      )}
       extraStats={(d) => {
         if (!d) return null;
         const empty = d.items.filter((t) => t.detailCount === 0).length;

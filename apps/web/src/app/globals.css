@@ -293,6 +293,14 @@
   }
 }
 
+/* 기준정보 서랍이 오른쪽에서 밀려 나온다. 어디서 왔는지 보여야 닫을 곳도 안다 */
+@keyframes ntms-drawer-in {
+  from {
+    transform: translateX(1.5rem);
+    opacity: 0;
+  }
+}
+
 /* 축 아래로 쌓인 막대가 자라 내려온다. 세로로만 늘려야 굵기가 변하지 않는다 */
 @keyframes ntms-grow {
   from {

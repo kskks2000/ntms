@@ -12,6 +12,7 @@ import { ValidityMeter } from '@/components/master/validity-meter';
 import { StatusChip } from '@/components/tms/status-chip';
 import type { Column } from '@/components/tms/data-table';
 import { cn } from '@/lib/cn';
+import { VehicleForm } from '@/components/master/forms/vehicle-form';
 
 /**
  * 차량.
@@ -128,6 +129,9 @@ export default function VehiclesPage() {
       emptyTitle="등록된 차량이 없습니다"
       emptyDescription="차량을 등록해야 트립에 배차할 수 있습니다."
       createLabel="차량 등록"
+      renderForm={({ open, id, onClose }) => (
+        <VehicleForm open={open} id={id} onClose={onClose} />
+      )}
       extraStats={(d) => {
         if (!d) return null;
         // 이미 지난 것은 "임박" 과 성격이 다르다. 임박은 준비하면 되지만

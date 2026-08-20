@@ -3,7 +3,10 @@
 import {
   QueryClient,
   QueryClientProvider,
+  useMutation,
+  useQueryClient,
   useQuery,
+  type UseMutationResult,
   type UseQueryOptions,
   type UseQueryResult,
 } from '@tanstack/react-query';
@@ -60,5 +63,37 @@ export function useApiQuery<T>(
     queryFn: ({ signal }) => apiFetch<T>(path, { accessToken, signal }),
     enabled: ready && Boolean(accessToken) && (options?.enabled ?? true),
     ...options,
+  });
+}
+
+/**
+ * 인증된 쓰기 (POST · PATCH · DELETE).
+ *
+ * 성공하면 `invalidate` 로 준 접두사를 가진 질의를 모두 낡은 것으로 표시한다.
+ * 기준정보를 고치면 목록의 행뿐 아니라 위쪽 요약 숫자("만료 임박 8건")도
+ * 함께 달라지는데, 고친 행만 갈아 끼우면 그 숫자가 옛 값으로 남는다.
+ */
+export function useApiMutation<TResult, TBody>(
+  build: (body: TBody) => { path: string; method: 'POST' | 'PATCH' | 'DELETE' },
+  options?: {
+    /** 낡은 것으로 표시할 질의 키 접두사 */
+    invalidate?: readonly (readonly unknown[])[];
+    onSuccess?: (result: TResult, body: TBody) => void;
+  },
+): UseMutationResult<TResult, ApiRequestError, TBody> {
+  const { accessToken } = useAuth();
+  const client = useQueryClient();
+
+  return useMutation<TResult, ApiRequestError, TBody>({
+    mutationFn: (body) => {
+      const { path, method } = build(body);
+      return apiFetch<TResult>(path, { method, body, accessToken });
+    },
+    onSuccess: (result, body) => {
+      for (const key of options?.invalidate ?? []) {
+        void client.invalidateQueries({ queryKey: key });
+      }
+      options?.onSuccess?.(result, body);
+    },
   });
 }

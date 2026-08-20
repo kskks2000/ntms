@@ -5,6 +5,7 @@ import type { RouteListItem } from '@ntms/shared';
 import { MasterPage } from '@/components/master/master-page';
 import type { Column } from '@/components/tms/data-table';
 import { cn } from '@/lib/cn';
+import { RouteForm } from '@/components/master/forms/route-form';
 
 /**
  * 라우트 (구간거리).
@@ -132,6 +133,9 @@ export default function RoutesPage() {
       emptyTitle="등록된 구간이 없습니다"
       emptyDescription="구간을 등록하면 거리 기반 운임과 도착예정 시각을 계산할 수 있습니다."
       createLabel="구간 등록"
+      renderForm={({ open, id, onClose }) => (
+        <RouteForm open={open} id={id} onClose={onClose} />
+      )}
       extraStats={(d) => {
         if (!d) return null;
         const odd = d.items.filter(
