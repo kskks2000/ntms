@@ -542,15 +542,44 @@ async function main(): Promise<void> {
         tenant_code: DEMO.tenantCode,
         tenant_name: DEMO.tenantName,
         tenant_name_en: 'NTMS Logistics',
+        // 세금계산서의 **공급자** 칸이 여기서 온다. 비어 있으면 계산서
+        // 발행이 통째로 막히고, 그 사실은 정산을 승인하고 발행을 누른
+        // 뒤에야 드러난다. 데모 값이지만 형식은 진짜와 같아야 한다.
+        business_no: '1208147521',
         ceo_name: '대표이사',
         biz_type: '운수업',
         biz_item: '화물운송주선',
+        address1: '서울특별시 중구 세종대로 110',
+        zip_code: '04524',
+        tel: '02-6000-1000',
+        email: 'billing@ntms.co.kr',
         timezone: 'Asia/Seoul',
         locale: 'ko-KR',
         currency_code: 'KRW',
         status: 'ACTIVE',
       },
     });
+    /*
+      이미 있는 테넌트라도 사업자등록번호가 비어 있으면 채운다.
+
+      기준정보 시드는 원래 "없는 것만 넣고 있는 것은 둔다" 이지만, 이 칸은
+      운영자가 화면에서 고치는 값이 아니라 **없으면 기능이 멈추는 값**이다.
+      값이 있으면 건드리지 않는다.
+    */
+    if (!tenant.business_no) {
+      tenant = await prisma.tenant.update({
+        where: { tenant_id: tenant.tenant_id },
+        data: {
+          business_no: '1208147521',
+          ceo_name: tenant.ceo_name ?? '대표이사',
+          biz_type: tenant.biz_type ?? '운수업',
+          biz_item: tenant.biz_item ?? '화물운송주선',
+          address1: tenant.address1 ?? '서울특별시 중구 세종대로 110',
+        },
+      });
+      console.log('테넌트 사업자등록번호를 채웠습니다 (세금계산서 공급자 칸)');
+    }
+
     console.log(`테넌트 ${tenant.tenant_code} (tenant_id=${tenant.tenant_id})`);
 
     for (const n of NUMBERING) {
@@ -619,11 +648,143 @@ async function main(): Promise<void> {
     }
 
     await seedCodes(prisma, tenant.tenant_id);
+    await seedSurchargeTypes(prisma, tenant.tenant_id);
 
     console.log('\n완료.');
   } finally {
     await prisma.$disconnect();
   }
+}
+
+/**
+ * 부대비용 유형.
+ *
+ * 정산이 부대비를 붙일 때 고르는 목록이고, 운임 계산기가 자동으로 만드는
+ * 세 가지(대기료 · 경유료 · 통행료)의 코드가 여기서 온다. 코드가 없으면
+ * 계산기가 만든 부대비 행이 유형 연결 없이 들어가므로, 회계 계정
+ * (`gl_account_code`)이 안 붙고 ERP 로 넘길 때 손으로 매핑해야 한다.
+ *
+ * ## 자동과 수동을 가르는 것
+ *
+ * `auto_calculate` 가 켜진 셋은 실적에 숫자로 남아 있는 것들이다 — 대기
+ * 분수, 정차 수, 통행료 실비. 나머지는 사람이 판단해야 한다. 하역비를
+ * 자동으로 붙였다가 나중에 근거를 못 대면, 그 달 청구서 전체가 의심을 받는다.
+ *
+ * `require_evidence` · `require_approval` 이 켜진 것은 결재 전까지 헤더
+ * 합계에 안 들어간다. 통제가 장식이 되지 않게 하려는 것이다.
+ *
+ * 공통코드와 같은 규칙을 따른다 — **없는 것만 넣고 있는 것은 둔다.**
+ */
+async function seedSurchargeTypes(prisma: PrismaClient, tenantId: bigint): Promise<void> {
+  const TYPES = [
+    {
+      code: 'WAITING',
+      name: '대기료',
+      method: 'PER_HOUR',
+      unitRate: 25000,
+      auto: true,
+      gl: '5120',
+      description: '무료 대기시간을 넘긴 만큼. 요율표의 waiting_free_min · waiting_rate_hour 로 산출한다',
+    },
+    {
+      code: 'EXTRA_STOP',
+      name: '경유료',
+      method: 'PER_UNIT',
+      unitRate: 30000,
+      auto: true,
+      gl: '5121',
+      description: '상·하차 두 곳을 넘는 정차 1개소당',
+    },
+    {
+      code: 'TOLL',
+      name: '통행료',
+      method: 'FIXED',
+      auto: true,
+      gl: '5122',
+      description: '운임에 포함하지 않는 요율표에서만 실비로 얹는다',
+    },
+    {
+      code: 'HANDLING',
+      name: '하역비',
+      method: 'FIXED',
+      amount: 60000,
+      evidence: true,
+      approval: true,
+      gl: '5123',
+      description: '기사가 직접 상·하차한 경우. 증빙과 승인이 필요하다',
+    },
+    {
+      code: 'ISLAND',
+      name: '도서산간 할증',
+      method: 'PERCENT',
+      ratePct: 15,
+      approval: true,
+      gl: '5124',
+      description: '기본운임 대비 비율. 도선료가 따로 붙으면 실비로 나눠 적는다',
+    },
+    {
+      code: 'NIGHT',
+      name: '야간·휴일 할증',
+      method: 'PERCENT',
+      ratePct: 20,
+      approval: true,
+      gl: '5125',
+      description: '22시~06시 상·하차 또는 법정공휴일 운행',
+    },
+    {
+      code: 'REFRIGERATION',
+      name: '냉동·냉장 할증',
+      method: 'PERCENT',
+      ratePct: 25,
+      gl: '5126',
+      description: '온도관리 차량. 요율표가 차종으로 이미 가르면 중복 청구가 되니 확인할 것',
+    },
+    {
+      code: 'RETURN',
+      name: '회차료',
+      method: 'PERCENT',
+      ratePct: 50,
+      evidence: true,
+      approval: true,
+      gl: '5127',
+      description: '상차지에 갔으나 물건을 못 싣고 돌아온 경우. 예외 기록과 함께 청구한다',
+    },
+  ] as const;
+
+  let created = 0;
+  for (const [i, t] of TYPES.entries()) {
+    const existing = await prisma.surcharge_type.findFirst({
+      where: { tenant_id: tenantId, surcharge_code: t.code },
+      select: { surcharge_type_id: true },
+    });
+    if (existing) continue;
+
+    await prisma.surcharge_type.create({
+      data: {
+        tenant_id: tenantId,
+        surcharge_code: t.code,
+        surcharge_name: t.name,
+        charge_method: t.method as never,
+        // rate_target 을 비워 두면 매출·매입 양쪽에서 고를 수 있다.
+        // 대기료는 화주에게 받고 운송사에도 주는 항목이라 공통이 맞다.
+        rate_target: null,
+        default_amount: 'amount' in t ? t.amount : null,
+        default_unit_rate: 'unitRate' in t ? t.unitRate : null,
+        default_rate_pct: 'ratePct' in t ? t.ratePct : null,
+        is_taxable: true,
+        require_evidence: 'evidence' in t ? Boolean(t.evidence) : false,
+        require_approval: 'approval' in t ? Boolean(t.approval) : false,
+        auto_calculate: 'auto' in t ? Boolean(t.auto) : false,
+        gl_account_code: t.gl,
+        sort_order: (i + 1) * 10,
+        description: t.description,
+        is_active: true,
+      },
+    });
+    created += 1;
+  }
+
+  console.log(`부대비용 유형 ${created}건 (이미 있는 것은 두었다)`);
 }
 
 /**

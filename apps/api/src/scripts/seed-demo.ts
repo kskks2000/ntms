@@ -17,13 +17,42 @@
  * ADMIN_DATABASE_URL 로 접속한다. 마이그레이션·초기적재와 같은 성격이며
  * 운영 DB 에서는 실행하지 않는다.
  */
+/*
+  Nest 서비스를 그대로 부르므로 데코레이터가 먼저 살아 있어야 한다.
+  `@Injectable()` 이 `Reflect.defineMetadata` 를 부르는데, 이 폴리필이
+  없으면 클래스 정의 시점에 죽는다 — import 순서가 곧 동작 조건이다.
+*/
+import 'reflect-metadata';
 import { hash as argon2 } from '@node-rs/argon2';
-import { PrismaClient } from '@ntms/db';
-import type { OrderStatus, TripStatus } from '@ntms/shared';
+import { PrismaClient, withTenant, type TenantContext, type TxClient } from '@ntms/db';
+// 쓰기 스키마도 앱과 같은 것을 쓴다. 컨트롤러가 parse 하는 그 스키마라야
+// 기본값(부가세 계산 · 결제수단 등)이 화면을 통한 것과 같아진다.
+import {
+  paymentRecordSchema,
+  settlementAdjustmentSchema,
+  settlementChargeSchema,
+  settlementCloseSchema,
+  settlementGenerateSchema,
+  settlementTransitionSchema,
+  taxInvoiceIssueSchema,
+  calculateRate,
+  type RateContext,
+  type OrderStatus,
+  type TripStatus,
+} from '@ntms/shared';
 // 실적과 집계는 앱이 쓰는 함수를 그대로 부른다. 시드가 자기 계산을 따로
 // 가지면 데모의 숫자와 앱이 만든 숫자가 갈라진다.
 import { EXECUTION_FOR_ACTUAL, buildActualFromExecution } from '../actual/actual-build.js';
 import { rebuildAggregates } from '../actual/actual-aggregate.js';
+// 트립의 예상 운임도 정산과 같은 엔진으로 뽑는다 — estimateFreight() 참고.
+import { loadRateBook, type RateBook } from '../settlement/rate-engine.js';
+// 정산도 같은 이유로 앱의 서비스를 그대로 부른다 — seedSettlements() 참고.
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import type { PrismaService } from '../prisma/prisma.service.js';
+import { SettlementService } from '../settlement/settlement.service.js';
+import { SettlementCloseService } from '../settlement/settlement-close.service.js';
+import { SettlementLedgerService } from '../settlement/settlement-ledger.service.js';
+import { invoiceIssueDate, isoDate, monthRange, startOfToday } from '../settlement/settlement-util.js';
 
 const TENANT_CODE = 'NTMS';
 
@@ -463,6 +492,51 @@ async function main(): Promise<void> {
         await prisma.user_account.deleteMany({ where: { user_id: { in: demoUserIds } } });
       }
 
+      /*
+        정산 계열이 가장 먼저 나간다. 이유가 셋이고 전부 FK 순서만으로는
+        안 걸리는 것들이다.
+
+        1. **마감 가드.** `settlement_close` 가 CLOSED 인 채로 남아 있으면
+           그 기간의 `transport_actual` 이 **UPDATE 부터** 트리거
+           (`trg_actual_close_guard`)에 42501 로 막힌다. FK 가 아니라
+           트리거라 삭제 순서 규칙이 안 알려 준다.
+        2. **순환 FK.** `settlement.tax_invoice_id` ↔
+           `tax_invoice.settlement_id` 가 서로를 가리킨다. 한쪽을 NULL 로
+           먼저 풀지 않으면 어느 쪽도 못 지운다.
+        3. **역참조.** `transport_actual.billing_settlement_id` 가 정산을
+           물고 있으므로 정산이 실적보다 먼저 나가야 한다.
+
+        순서가 이렇게 된 이유:
+
+        마감을 **맨 먼저** 푼다. 처음에는 정산을 지운 다음에 풀었는데, 그
+        사이에 있는 `transport_actual.billing_settlement_id = NULL` 이
+        UPDATE 라서 거기서 죽었다. 가드는 "실적을 지울 때" 가 아니라
+        "실적을 건드릴 때" 걸린다 — 마감된 달의 실적은 **한 칸도** 못 바꾼다.
+
+        다만 `settlement.settlement_close_id` 가 마감을 FK 로 물고 있으므로,
+        마감을 지우기 전에 그 칸을 먼저 NULL 로 푼다. 순환 FK 를 푸는
+        `tax_invoice_id` 와 같은 자리에서 함께 푼다.
+
+        이 순서는 `--reset` 을 **두 번 연속** 돌려야 검증된다. 첫 번째는
+        마감도 계산서도 없는 상태라 아무것도 안 걸린다.
+      */
+      await prisma.settlement.updateMany({
+        where: { tenant_id: tenantId },
+        data: { tax_invoice_id: null, settlement_close_id: null },
+      });
+      await prisma.settlement_close.deleteMany({ where: { tenant_id: tenantId } });
+      await prisma.payment_record.deleteMany({ where: { tenant_id: tenantId } });
+      await prisma.tax_invoice.deleteMany({ where: { tenant_id: tenantId } });
+      await prisma.settlement_adjustment.deleteMany({ where: { tenant_id: tenantId } });
+      await prisma.settlement_charge.deleteMany({ where: { tenant_id: tenantId } });
+      await prisma.settlement_detail.deleteMany({ where: { tenant_id: tenantId } });
+      await prisma.transport_actual.updateMany({
+        where: { tenant_id: tenantId },
+        data: { billing_settlement_id: null, payment_settlement_id: null },
+      });
+      await prisma.settlement.deleteMany({ where: { tenant_id: tenantId } });
+      await prisma.fuel_surcharge.deleteMany({ where: { tenant_id: tenantId } });
+
       await prisma.kpi_daily.deleteMany({ where: { tenant_id: tenantId } });
       await prisma.driver_work_log.deleteMany({ where: { tenant_id: tenantId } });
       await prisma.vehicle_operation_daily.deleteMany({ where: { tenant_id: tenantId } });
@@ -482,6 +556,8 @@ async function main(): Promise<void> {
       await prisma.order_status_history.deleteMany({ where: { tenant_id: tenantId } });
       await prisma.transport_order.deleteMany({ where: { tenant_id: tenantId } });
       await prisma.distance_master.deleteMany({ where: { tenant_id: tenantId } });
+      // 계약이 요율표를 FK 로 물고 있다 (partner_contract.rate_table_id)
+      await prisma.partner_contract.deleteMany({ where: { tenant_id: tenantId } });
       await prisma.rate_table.deleteMany({ where: { tenant_id: tenantId } });
       await prisma.vehicle.deleteMany({ where: { tenant_id: tenantId } });
       await prisma.driver.deleteMany({ where: { tenant_id: tenantId } });
@@ -798,9 +874,32 @@ async function main(): Promise<void> {
     // 맞는 상세를 함께 넣는다 — 거리요율은 거리구간 × 톤급, 권역요율은
     // 출발권역 × 도착권역, 전세차는 차종별 트립 단가다.
     //
-    // 매입(지급)은 매출(청구)의 약 85% 로 둔다. 그래야 정산 화면에서 마진이
-    // 음수로 뒤집히지 않는다.
-    const PAY_RATIO = 0.85;
+    /*
+      매입(지급)은 매출(청구)보다 낮다. **다만 차종마다 다르다.**
+
+      전에는 0.85 하나를 전 차종에 곱했다. 그러면 매입표가 매출표의
+      상수배가 되어 **모든 운송의 마진율이 같은 값**이 된다 — KPI 의
+      마진율 선이 자로 그은 듯 평평해지고, 그 화면은 볼 이유가 없어진다.
+      "어떤 운송이 남는가" 는 이 데이터로는 물을 수 없는 질문이 된다.
+
+      실제로도 비율은 차종마다 다르다. 흔한 차는 대차가 많아 값을 눌러
+      부를 수 있고, 냉동·트레일러처럼 대체가 어려운 차는 운송사가 값을
+      지킨다. 그 차이가 곧 마진의 분포다.
+
+      전 구간에서 1 보다 작아야 한다. 하나라도 넘기면 그 차종의 운송이
+      전부 적자로 찍히고, 데모를 여는 사람은 계산이 틀렸다고 읽는다.
+    */
+    const PAY_RATIO: Record<string, number> = {
+      'CG-1': 0.78,
+      'CG-25': 0.8,
+      'WG-5': 0.83,
+      'WG-11': 0.86,
+      'RF-5': 0.89,
+      'RF-11': 0.9,
+      'TR-25': 0.92,
+    };
+    /** 차종이 안 걸리는 줄(권역요율)에 쓴다 */
+    const PAY_RATIO_DEFAULT = 0.85;
 
     /** 거리요율: 거리 구간 4개 × 톤급 4개. 기본료 + km 단가 */
     const DISTANCE_BANDS = [
@@ -809,10 +908,24 @@ async function main(): Promise<void> {
       { from: 150, to: 300 },
       { from: 300, to: null },
     ] as const;
+    /*
+      **차종을 하나도 빠뜨리지 않는다.**
+
+      거리요율은 계약이 없는 건이 떨어지는 바닥이다. 여기 없는 차종으로
+      운송이 나가면 정산이 그 줄을 0원으로 만들고, 확정 관문이 막는다 —
+      화면에는 "운임표에 안 걸립니다" 만 뜨고 왜인지는 안 나온다.
+      냉장·냉동을 빠뜨렸다가 6월 매출의 17%가 0원으로 나온 적이 있다.
+
+      온도관리 차량은 같은 톤급 상온차보다 비싸다. 그 차이가 냉동 할증을
+      따로 안 붙여도 운임에 들어가 있는 이유다.
+    */
     const DISTANCE_TIERS = [
+      { type: 'CG-1', base: 35_000, perKm: 620 },
       { type: 'CG-25', base: 60_000, perKm: 900 },
       { type: 'WG-5', base: 95_000, perKm: 1_250 },
       { type: 'WG-11', base: 150_000, perKm: 1_750 },
+      { type: 'RF-5', base: 118_000, perKm: 1_520 },
+      { type: 'RF-11', base: 186_000, perKm: 2_080 },
       { type: 'TR-25', base: 230_000, perKm: 2_400 },
     ] as const;
 
@@ -879,8 +992,11 @@ async function main(): Promise<void> {
         },
       });
 
-      const scale = t.target === 'PAYMENT' ? PAY_RATIO : 1;
-      const round = (n: number) => Math.round((n * scale) / 1000) * 1000;
+      const scaleOf = (vehicleType: string | null): number => {
+        if (t.target !== 'PAYMENT') return 1;
+        return (vehicleType === null ? undefined : PAY_RATIO[vehicleType]) ?? PAY_RATIO_DEFAULT;
+      };
+      const money = (n: number, scale: number) => Math.round((n * scale) / 1000) * 1000;
       const details: Array<Record<string, unknown>> = [];
 
       if (t.method === 'DISTANCE') {
@@ -888,13 +1004,14 @@ async function main(): Promise<void> {
           for (const band of DISTANCE_BANDS) {
             // 멀수록 km 단가가 내려간다 — 실제 운임표가 그렇게 생겼다
             const taper = band.from >= 300 ? 0.8 : band.from >= 150 ? 0.88 : 1;
+            const scale = scaleOf(tier.type);
             details.push({
               vehicle_type_id: vtypeId.get(tier.type)!,
               distance_from: band.from,
               distance_to: band.to,
-              base_amount: round(tier.base),
+              base_amount: money(tier.base, scale),
               unit_rate: Math.round(tier.perKm * taper * scale),
-              min_amount: round(tier.base),
+              min_amount: money(tier.base, scale),
               // 좁은 구간이 먼저 잡혀야 한다
               priority: band.to === null ? 90 : 100,
               remark: `${band.from}~${band.to ?? ''}km`,
@@ -902,25 +1019,27 @@ async function main(): Promise<void> {
           }
         }
       } else if (t.method === 'ZONE') {
+        const scale = scaleOf(null);
         for (const pair of ZONE_PAIRS) {
           details.push({
             from_zone_id: zoneId.get(pair.from)!,
             to_zone_id: zoneId.get(pair.to)!,
-            base_amount: round(pair.amount),
-            extra_stop_amount: round(30_000),
+            base_amount: money(pair.amount, scale),
+            extra_stop_amount: money(30_000, scale),
             waiting_free_min: 60,
-            waiting_rate_hour: round(25_000),
+            waiting_rate_hour: money(25_000, scale),
             priority: 100,
           });
         }
       } else {
         for (const vt of VEHICLE_TYPES) {
+          const scale = scaleOf(vt.code);
           details.push({
             vehicle_type_id: vtypeId.get(vt.code)!,
-            base_amount: round(TRIP_RATES[vt.code]!),
-            extra_stop_amount: round(40_000),
+            base_amount: money(TRIP_RATES[vt.code]!, scale),
+            extra_stop_amount: money(40_000, scale),
             waiting_free_min: 90,
-            waiting_rate_hour: round(30_000),
+            waiting_rate_hour: money(30_000, scale),
             priority: 100,
           });
         }
@@ -937,6 +1056,109 @@ async function main(): Promise<void> {
       rateDetailCount += details.length;
     }
     console.log(`단가 ${tariffs.length}건 · 요율 상세 ${rateDetailCount}건`);
+
+    // -----------------------------------------------------------------
+    // 거래처 계약 · 유류할증 — 정산이 읽는 두 가지
+    //
+    // 계약은 **결제조건**을 든다. 정산이 결제 예정일을 만들 때 이것을 먼저
+    // 보고, 없으면 거래처의 기본값으로 떨어진다. 화주마다 결제일이 다른
+    // 것이 정상이고, 그래야 미수 연령분석에 여러 갈래가 생긴다.
+    //
+    // 유류할증은 월별이다. 지난달과 이번 달의 유가를 달리 둬야 "왜 지난달
+    // 보다 운임이 올랐나" 라는 질문에 산출 계단이 답할 수 있다.
+    // -----------------------------------------------------------------
+    const CONTRACTS = [
+      { partner: 'SH-1001', target: 'BILLING', name: '연간 운송계약', table: 'RT-BIL-ZONE', terms: 30, closing: 31 },
+      { partner: 'SH-1002', target: 'BILLING', name: '전세차 운송계약', table: 'RT-BIL-TRIP', terms: 45, closing: 25 },
+      { partner: 'SH-1003', target: 'BILLING', name: '표준 운송계약', table: 'RT-BIL-DIST', terms: 60, closing: 31 },
+      { partner: 'SH-1004', target: 'BILLING', name: '표준 운송계약', table: 'RT-BIL-DIST', terms: 30, closing: 31 },
+      { partner: 'CR-2001', target: 'PAYMENT', name: '연간 위수탁계약', table: 'RT-PAY-CR01', terms: 15, closing: 31 },
+      { partner: 'CR-2002', target: 'PAYMENT', name: '표준 위수탁계약', table: 'RT-PAY-DIST', terms: 30, closing: 31 },
+      { partner: 'CR-2003', target: 'PAYMENT', name: '표준 위수탁계약', table: 'RT-PAY-DIST', terms: 20, closing: 31 },
+      { partner: 'CR-2004', target: 'PAYMENT', name: '스팟 운송계약', table: 'RT-PAY-SPOT', terms: 10, closing: 31 },
+      { partner: 'CR-2005', target: 'PAYMENT', name: '스팟 운송계약', table: 'RT-PAY-SPOT', terms: 10, closing: 31 },
+    ] as const;
+
+    const tableIdByCode = new Map(
+      (
+        await prisma.rate_table.findMany({
+          where: { tenant_id: tenantId },
+          select: { rate_table_id: true, rate_table_code: true },
+        })
+      ).map((t) => [t.rate_table_code, t.rate_table_id]),
+    );
+
+    let contractCount = 0;
+    for (const [i, c] of CONTRACTS.entries()) {
+      const pid = partnerId.get(c.partner);
+      if (!pid) continue;
+      await prisma.partner_contract.create({
+        data: {
+          tenant_id: tenantId,
+          partner_id: pid,
+          contract_no: `CT-${new Date().getFullYear()}-${String(i + 1).padStart(3, '0')}`,
+          contract_name: c.name,
+          contract_target: c.target,
+          contract_type: c.target === 'BILLING' ? 'TRANSPORT' : 'CONSIGNMENT',
+          start_date: yearStart,
+          end_date: yearEnd,
+          rate_table_id: tableIdByCode.get(c.table) ?? null,
+          settlement_cycle: 'MONTHLY',
+          closing_day: c.closing,
+          payment_terms_days: c.terms,
+          auto_renew: i % 3 === 0,
+          status: 'ACTIVE',
+          signed_at: yearStart,
+        },
+      });
+      contractCount += 1;
+    }
+
+    /*
+      유류할증 — 최근 넉 달.
+
+      기준유가는 계약이 정한 고정값이고 당월 유가가 움직인다. 실제 운영도
+      그렇다. 오르는 달과 내리는 달을 섞어야 "이번 달에 왜 이 금액인가" 가
+      산출 계단에서 읽힌다 — 늘 같은 할증률이면 그 줄은 배경이 된다.
+    */
+    const FUEL_BY_MONTH = [
+      { back: 3, actual: 1_612, ratePct: 3.5 },
+      { back: 2, actual: 1_688, ratePct: 5.0 },
+      { back: 1, actual: 1_741, ratePct: 6.5 },
+      { back: 0, actual: 1_705, ratePct: 5.5 },
+    ] as const;
+
+    let fuelCount = 0;
+    for (const f of FUEL_BY_MONTH) {
+      const now = new Date();
+      const m = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - f.back, 1));
+      const ym = `${m.getUTCFullYear()}${String(m.getUTCMonth() + 1).padStart(2, '0')}`;
+      const monthEnd = new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 0));
+
+      for (const target of ['BILLING', 'PAYMENT'] as const) {
+        await prisma.fuel_surcharge.create({
+          data: {
+            tenant_id: tenantId,
+            rate_target: target,
+            partner_id: null,
+            fuel_type: 'DIESEL',
+            apply_year_month: ym,
+            apply_start_date: m,
+            apply_end_date: monthEnd,
+            base_fuel_price: 1_550,
+            actual_fuel_price: f.actual,
+            // 매입 할증은 매출보다 낮다. 그 차이가 마진에 남는다.
+            surcharge_rate_pct: target === 'BILLING' ? f.ratePct : Number((f.ratePct * 0.8).toFixed(2)),
+            status: 'APPROVED',
+            approved_at: m,
+            is_active: true,
+          },
+        });
+        fuelCount += 1;
+      }
+    }
+
+    console.log(`거래처 계약 ${contractCount}건 · 유류할증 ${fuelCount}건`);
 
     // -----------------------------------------------------------------
     // 오더 — 오전 9시 배차실의 상태 분포
@@ -1280,7 +1502,20 @@ async function main(): Promise<void> {
 
         const totalVolume = members.reduce((a, o) => a + o.volume, 0);
         const vt = VEHICLE_TYPES.find((v) => vtypeId.get(v.code) === vinfo.typeId)!;
-
+        // 예상 운임은 정산과 같은 엔진으로 뽑는다. 자세한 것은 estimateFreight().
+        const freight = await estimateFreight(prisma, tenantId, startAt, {
+          vehicleTypeId: String(vinfo.typeId),
+          fromZoneId: from.zone === null ? null : String(from.zone),
+          toZoneId: to.zone === null ? null : String(to.zone),
+          distanceKm: lane.km,
+          weightKg: totalWeight,
+          volumeCbm: totalVolume,
+          qty: null,
+          palletQty: Math.max(1, Math.round(totalVolume / 1.6)),
+          stopCount: 2,
+          waitingMinutes: 0,
+          tollFee: lane.toll,
+        });
         const trip = await prisma.trip.create({
           data: {
             tenant_id: tenantId,
@@ -1316,9 +1551,9 @@ async function main(): Promise<void> {
             planned_start_at: startAt,
             planned_end_at: endAt,
             planned_toll_fee: lane.toll,
-            estimated_billing_amount: Math.round((lane.km * 1650) / 1000) * 1000,
-            estimated_payment_amount: Math.round((lane.km * 1280) / 1000) * 1000,
-            estimated_margin: Math.round((lane.km * 370) / 1000) * 1000,
+            estimated_billing_amount: freight.billing,
+            estimated_payment_amount: freight.payment,
+            estimated_margin: freight.margin,
             status: plan.tripStatus,
             is_auto_generated: rnd() < 0.4,
             confirmed_at: plan.tripStatus === 'DRAFT' ? null : startAt,
@@ -1790,7 +2025,18 @@ async function main(): Promise<void> {
     // 만들지 않는다 — 사용자가 「실적 만들기」를 눌러 프로세스를 한 번
     // 밟아 볼 자리를 남겨 두는 것이다.
     // -----------------------------------------------------------------
-    const HISTORY_DAYS = 13;
+    /*
+      석 달치를 만든다.
+
+      13일이면 관제·실적 화면에는 충분하지만 **정산은 월 단위**다
+      (`settlement_year_month CHAR(6)`). 한 달치로는 마감할 지난달도,
+      결제기한을 넘긴 미수도, 유류할증이 달마다 달라지는 것도 안 생긴다.
+      화면의 절반이 늘 비어 있게 된다.
+
+      최근 13일만 정차·인수증·예외까지 촘촘히 만들고 그 이전은 실적과
+      집계 위주로 둔다 — 관제 화면은 과거를 안 보고, 정산은 금액만 본다.
+    */
+    const HISTORY_DAYS = 75;
 
     /**
      * 나쁜 주와 회복하는 주.
@@ -1800,7 +2046,11 @@ async function main(): Promise<void> {
      * 가운데(8일 전)를 골짜기로 두고 앞뒤로 회복시킨다. 화면을 열면 "여기서
      * 무슨 일이 있었나" 를 묻게 되는 모양이다.
      */
-    const slump = (daysAgo: number) => Math.max(0, 1 - Math.abs(daysAgo - 8) / 4);
+    const slump = (daysAgo: number) =>
+      // 나쁜 주는 한 번이 아니라 가끔 온다. 골짜기를 셋 두면 KPI 선이
+      // "여기서 무슨 일이 있었나" 를 세 번 묻게 된다. 하나만 두면 석 달
+      // 그래프에서 그 골짜기가 오른쪽 끝에 붙어 추세로 안 읽힌다.
+      Math.max(0, ...[8, 34, 61].map((peak) => 1 - Math.abs(daysAgo - peak) / 4));
 
     /** 그날의 트립 수. 주말은 절반쯤으로 줄인다 — 물동량에도 요일이 있다 */
     const tripsOn = (day: Date) => {
@@ -1942,7 +2192,20 @@ async function main(): Promise<void> {
         const vehicle = fitting[seq % fitting.length]!;
         const vinfo = vehicleInfo.get(vehicle)!;
         const vt = VEHICLE_TYPES.find((v) => vtypeId.get(v.code) === vinfo.typeId)!;
-
+        // 예상 운임은 정산과 같은 엔진으로 뽑는다. 자세한 것은 estimateFreight().
+        const freight = await estimateFreight(prisma, tenantId, startAt, {
+          vehicleTypeId: String(vinfo.typeId),
+          fromZoneId: from.zone === null ? null : String(from.zone),
+          toZoneId: to.zone === null ? null : String(to.zone),
+          distanceKm: lane.km,
+          weightKg: totalWeight,
+          volumeCbm: totalVolume,
+          qty: null,
+          palletQty: Math.max(1, Math.round(totalVolume / 1.6)),
+          stopCount: 2,
+          waitingMinutes: 0,
+          tollFee: lane.toll,
+        });
         const trip = await prisma.trip.create({
           data: {
             tenant_id: tenantId,
@@ -1971,9 +2234,9 @@ async function main(): Promise<void> {
             planned_start_at: startAt,
             planned_end_at: endAt,
             planned_toll_fee: lane.toll,
-            estimated_billing_amount: Math.round((lane.km * 1650) / 1000) * 1000,
-            estimated_payment_amount: Math.round((lane.km * 1280) / 1000) * 1000,
-            estimated_margin: Math.round((lane.km * 370) / 1000) * 1000,
+            estimated_billing_amount: freight.billing,
+            estimated_payment_amount: freight.payment,
+            estimated_margin: freight.margin,
             status: 'CLOSED',
             confirmed_at: addMinutes(startAt, -240),
           },
@@ -2317,6 +2580,11 @@ async function main(): Promise<void> {
 
     console.log(`지난 ${HISTORY_DAYS}일 — 트립 ${hTrip}건 · 오더 ${hOrder}건 · 인수증 ${hPod}건`);
     console.log(`실적 ${actualCount}건 (확정 ${confirmedCount} · 확정 막힘 ${blockedCount})`);
+    if (rateFallbackCount > 0) {
+      // 조용히 넘기지 않는다. 요율표에 구멍이 있다는 뜻이고, 그 구멍은
+      // 정산에서 0원짜리 명세 줄로 다시 나타난다.
+      console.log(`운임표에 안 걸린 트립 ${rateFallbackCount}건 — 고정단가로 떨어졌습니다`);
+    }
 
     // -----------------------------------------------------------------
     // 집계 — 운행일보 · 기사 근무 · KPI
@@ -2329,6 +2597,14 @@ async function main(): Promise<void> {
       await rebuildAggregates(prisma, { tenantId, userId: adminUserId }, dateOnly(day));
     }
     console.log(`집계 ${historyDays.length + 1}일치 — 운행일보 · 기사 근무 · KPI`);
+    // -----------------------------------------------------------------
+    // 정산 — 오더에서 돈까지를 닫는다
+    // -----------------------------------------------------------------
+    if (adminUserId === null) {
+      console.log('정산 건너뜀 — admin 계정이 없습니다.');
+    } else {
+      await seedSettlements(prisma, { tenantId, userId: adminUserId });
+    }
 
     console.log(
       `편성 ${tripIndex}건 · 배정 ${allocationCount}건 · 배차 ${dispatchCount}건 · 운송실행 ${executionCount}건`,
@@ -2490,6 +2766,489 @@ async function seedDemoUsers(prisma: PrismaClient, tenantId: bigint): Promise<vo
     `데모 계정 ${created}명 · 로그인 이력 ${historyCount}건` +
       (fromEnv ? ' (비밀번호: 환경변수)' : ' (비밀번호: 저장소 기본값 — 가동계면 다시 볼 것)'),
   );
+}
+
+/**
+ * 정산 — 관문마다 걸린 돈이 있어야 사다리가 그려진다.
+ *
+ * ## 앱의 서비스를 그대로 부르는 이유
+ *
+ * 정산 금액은 요율표 매칭 → 최소운임 → 유류할증 → 자동 부대비 → 반올림을
+ * 거쳐 나온다. 시드가 그 계산을 따로 흉내 내면 데모에 적힌 숫자와 화면에서
+ * 「운임 재산출」을 누른 뒤의 숫자가 갈라지고, 그때 사람이 의심하는 것은
+ * 시드가 아니라 **화면**이다. 집계(`rebuildAggregates`)에서 내린 것과 같은
+ * 판단이다.
+ *
+ * ## 달마다 다른 국면을 만드는 이유
+ *
+ * CashLadder 는 각 단이 **줄어드는 폭**이 요점이다. 전부 수금까지 끝내 놓으면
+ * 단이 하나로 보이고, 전부 미정산으로 두면 아랫단이 통째로 빈다.
+ *
+ * | 달 | 국면 | 화면에서 보이는 것 |
+ * |---|---|---|
+ * | 가장 오래된 달 | 마감 완료 | 마감 해제를 눌러 볼 수 있다. 한 건은 미수로 남겨 연체가 잡힌다 |
+ * | 가운데 달 | 수금 중 | 결재 대기 · 미발행 · 부분수납 · 완납이 섞인다 |
+ * | 이번 달 | 진행 중 | 일부 거래처만 정산을 돌렸다 — 사다리 맨 윗단이 둘째 단보다 넓다 |
+ *
+ * 계획서에는 지난달까지 닫으라고 적었지만 그러면 **지금 마감할 수 있는 달이
+ * 하나도 없다.** 마감 화면의 요점이 관문인데 눌러 볼 것이 없으면 그 화면은
+ * 읽기 전용이 된다. 그래서 가장 오래된 달만 닫고, 가운데 달은 관문이
+ * 초록불인 채로 남겨 둔다.
+ */
+async function seedSettlements(
+  prisma: PrismaClient,
+  ctx: { tenantId: bigint; userId: bigint },
+): Promise<void> {
+  /*
+    `PrismaService` 는 이 서비스들에서 `run()` 하나만 쓰인다. Nest 컨테이너를
+    띄우면 앱 설정(DATABASE_URL · 가드 · 인터셉터)이 딸려 오는데 시드에는
+    필요 없는 것들이라, 그 메서드만 갖춘 대역을 넘긴다.
+
+    시드는 관리자 접속(BYPASSRLS)이지만 `withTenant` 가 GUC 를 그대로 걸어
+    주므로 앱이 도는 것과 같은 경로다.
+
+    타임아웃만 앱보다 길게 잡는다. 앱의 15초는 사람이 버튼을 누르고 기다리는
+    시간이고, 여기서는 한 거래처의 한 달치 실적 수십 건이 한 트랜잭션에
+    들어간다.
+  */
+  const prismaShim = {
+    run: <T>(c: TenantContext, fn: (tx: TxClient) => Promise<T>) =>
+      withTenant(prisma, c, fn, { timeout: 120_000, maxWait: 30_000 }),
+  } as unknown as PrismaService;
+
+  const settlement = new SettlementService(prismaShim);
+  const ledger = new SettlementLedgerService(prismaShim, settlement);
+  const closing = new SettlementCloseService(prismaShim);
+
+  const principal: AuthPrincipal = {
+    userId: ctx.userId,
+    userUuid: '',
+    tenantId: ctx.tenantId,
+    tenantCode: TENANT_CODE,
+    loginId: 'admin',
+    roles: ['ADMIN'],
+  };
+
+  const ymOf = (d: Date) => `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+
+  const span = await prisma.transport_actual.aggregate({
+    where: { tenant_id: ctx.tenantId, confirm_status: 'CONFIRMED' },
+    _min: { actual_date: true },
+    _max: { actual_date: true },
+  });
+  if (!span._min.actual_date || !span._max.actual_date) {
+    console.log('정산 건너뜀 — 확정된 실적이 없습니다.');
+    return;
+  }
+
+  const months: string[] = [];
+  const cursor = new Date(
+    Date.UTC(span._min.actual_date.getUTCFullYear(), span._min.actual_date.getUTCMonth(), 1),
+  );
+  const lastYm = ymOf(span._max.actual_date);
+  while (ymOf(cursor) <= lastYm) {
+    months.push(ymOf(cursor));
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+
+  const today = startOfToday();
+
+  /** 발행일은 법정 기한(다음 달 10일)과 오늘 중 이른 날. 미래 날짜의 계산서는 없다 */
+  const issueDayOf = (ym: string): string => {
+    const legal = invoiceIssueDate(ym);
+    return isoDate(legal > today ? today : legal);
+  };
+
+  /** 입금일은 기한 사흘 전. 기한이 아직 안 왔으면 오늘 */
+  const payDayOf = (due: Date | null): string => {
+    const base = due ? new Date(due.getTime() - 3 * 86_400_000) : today;
+    return isoDate(base > today ? today : base);
+  };
+
+  /**
+   * 그 달에 아직 정산에 안 묶인 확정 실적을 가진 거래처.
+   *
+   * 매출은 화주(오더가 든다)로, 매입은 운송사(실적이 든다)로 묶인다. 이
+   * 갈림이 `generate()` 안의 두 그룹 함수와 같아야 하므로 조건도 그쪽을
+   * 그대로 따라 적었다.
+   */
+  const partnersOf = async (type: 'BILLING' | 'PAYMENT', ym: string): Promise<bigint[]> => {
+    const [from, to] = monthRange(ym);
+    if (type === 'PAYMENT') {
+      const rows = await prisma.transport_actual.findMany({
+        where: {
+          tenant_id: ctx.tenantId,
+          actual_date: { gte: from, lte: to },
+          confirm_status: 'CONFIRMED',
+          payment_settled: false,
+        },
+        select: { carrier_id: true },
+        distinct: ['carrier_id'],
+        orderBy: { carrier_id: 'asc' },
+      });
+      return rows.map((r) => r.carrier_id);
+    }
+    const rows = await prisma.actual_order.findMany({
+      where: {
+        tenant_id: ctx.tenantId,
+        transport_actual: {
+          tenant_id: ctx.tenantId,
+          actual_date: { gte: from, lte: to },
+          confirm_status: 'CONFIRMED',
+          billing_settled: false,
+        },
+      },
+      select: { shipper_id: true },
+      distinct: ['shipper_id'],
+      orderBy: { shipper_id: 'asc' },
+    });
+    return rows.map((r) => r.shipper_id);
+  };
+
+  // 수기 부대비 한 건을 붙일 유형. 증빙·승인이 필요한 것이라야 "결재 전에는
+  // 헤더 합계에 안 들어간다" 를 화면에서 볼 수 있다.
+  const handling = await prisma.surcharge_type.findFirst({
+    where: { tenant_id: ctx.tenantId, surcharge_code: 'HANDLING' },
+    select: { surcharge_type_id: true, surcharge_name: true, default_amount: true },
+  });
+
+  const tally = { created: 0, charged: 0, adjusted: 0, invoiced: 0, paid: 0, closed: 0 };
+  const trouble: string[] = [];
+
+  for (const type of ['BILLING', 'PAYMENT'] as const) {
+    for (const [index, ym] of months.entries()) {
+      const phase =
+        index === 0 ? 'SETTLED' : index === months.length - 1 ? 'RUNNING' : 'COLLECTING';
+
+      let partners = await partnersOf(type, ym);
+      /*
+        이번 달은 절반만 돌린다.
+
+        "실적은 확정됐는데 정산을 아직 안 돌렸다" 가 사다리 맨 윗단의 폭이다.
+        전부 묶어 버리면 그 폭이 0 이 되고, 가장 흔한 병목이 그림에서 사라진다.
+      */
+      if (phase === 'RUNNING') {
+        partners = partners.slice(0, Math.max(1, Math.floor(partners.length / 2)));
+      }
+
+      for (const partnerId of partners) {
+        const result = await settlement.generate(
+          principal,
+          settlementGenerateSchema.parse({
+            settlementType: type,
+            yearMonth: ym,
+            partnerId: String(partnerId),
+          }),
+        );
+        tally.created += result.succeeded;
+        for (const f of result.failures) {
+          trouble.push(`${ym} ${type} 생성 — ${f.label}: ${f.reason}`);
+        }
+      }
+
+      const rows = await prisma.settlement.findMany({
+        where: {
+          tenant_id: ctx.tenantId,
+          settlement_type: type as never,
+          settlement_year_month: ym,
+          deleted_at: null,
+        },
+        select: { settlement_id: true, status: true },
+        orderBy: { settlement_id: 'asc' },
+      });
+
+      for (const [i, row] of rows.entries()) {
+        const id = String(row.settlement_id);
+
+        /*
+          어디까지 밀어 올릴지.
+
+          같은 달 안에서도 정산마다 멈추는 자리가 달라야 각 관문에 걸린 돈이
+          보인다. 나머지 연산으로 갈라 두면 시드 난수와 무관하게 매번 같은
+          모양이 나온다 — 화면을 확인하는 사람이 어제와 견줄 수 있어야 한다.
+        */
+        const target =
+          phase === 'SETTLED'
+            ? i === rows.length - 1
+              ? 'INVOICED' // 한 건은 미수로 남긴다. 기한이 이미 지나 연체로 잡힌다
+              : 'PAID'
+            : phase === 'COLLECTING'
+              ? /*
+                  다섯 자리로 갈라야 사다리의 **모든 단**에 폭이 생긴다.
+
+                  넷으로 갈랐을 때는 산출 단계에 멈춘 정산이 없어
+                  「정산 생성」과 「확정 · 승인」이 같은 금액이 됐다.
+                  두 단이 붙어 보이면 그 사이 관문은 없는 것과 같다.
+
+                  완납을 **앞쪽에** 둔다. 매출은 화주 4곳, 매입은 운송사
+                  5곳이라 배열의 뒤쪽은 매입에만 돌아간다. 완납을 뒤에
+                  두면 매입만 전액 지급되고 매출은 부분수납에서 끊겨,
+                  마지막 단에서 **매입 사다리가 매출 사다리보다 넓어진다**
+                  — 화면에는 마진이 음수인 띠로 그려진다.
+                */
+                (['CALCULATED', 'PAID', 'APPROVED', 'PAID', 'CONFIRMED'] as const)[i % 5]!
+              : (['CALCULATED', 'CONFIRMED', 'CALCULATED', 'APPROVED'] as const)[i % 4]!;
+
+        const partial = phase === 'COLLECTING' && i % 5 === 3;
+        const chargeHere = handling !== null && phase === 'RUNNING' && i === 0;
+        const adjustHere = phase === 'COLLECTING' && i % 5 === 3;
+
+        const RUNGS = ['DRAFT', 'CALCULATED', 'CONFIRMED', 'APPROVED', 'INVOICED', 'PAID'];
+        let status: string = row.status;
+
+        try {
+          while (RUNGS.indexOf(status) < RUNGS.indexOf(target)) {
+            if (status === 'DRAFT') {
+              if (chargeHere && handling) {
+                // 산출 전에 붙인다. 승인이 필요한 유형이라 REQUESTED 로 들어가고,
+                // 결재 전까지 헤더 합계에 안 들어간다 — 통제가 장식이 아니라는 것.
+                await settlement.addCharge(
+                  principal,
+                  id,
+                  settlementChargeSchema.parse({
+                    surchargeTypeId: String(handling.surcharge_type_id),
+                    chargeCode: 'HANDLING',
+                    chargeName: handling.surcharge_name,
+                    chargeMethod: 'FIXED',
+                    amount: Number(handling.default_amount ?? 60_000),
+                    remark: '기사 직접 하역 — 증빙 접수, 결재 대기',
+                  }),
+                );
+                tally.charged += 1;
+              }
+              await settlement.transition(
+                principal,
+                id,
+                settlementTransitionSchema.parse({ action: 'CALCULATE' }),
+              );
+              status = 'CALCULATED';
+              continue;
+            }
+
+            if (status === 'CALCULATED' || status === 'REVIEWING') {
+              await settlement.transition(
+                principal,
+                id,
+                settlementTransitionSchema.parse({ action: 'CONFIRM' }),
+              );
+              status = 'CONFIRMED';
+              if (adjustHere) {
+                // 확정된 정산의 금액을 바꾸는 **유일한 길**이 조정 전표다.
+                // 그 자리가 비어 있으면 상세의 산출 계단에 한 단이 빠진다.
+                const made = await settlement.addAdjustment(
+                  principal,
+                  id,
+                  settlementAdjustmentSchema.parse({
+                    adjustmentType: 'CLAIM',
+                    reason: '운송 중 파손 — 화주 클레임 접수분 차감',
+                    supplyAmount: 180_000,
+                  }),
+                );
+                await settlement.approveAdjustment(
+                  principal,
+                  id,
+                  made.settlementAdjustmentId,
+                  true,
+                  null,
+                );
+                tally.adjusted += 1;
+              }
+              continue;
+            }
+
+            if (status === 'CONFIRMED') {
+              await settlement.transition(
+                principal,
+                id,
+                settlementTransitionSchema.parse({ action: 'APPROVE' }),
+              );
+              status = 'APPROVED';
+              continue;
+            }
+
+            if (status === 'APPROVED') {
+              await ledger.issueInvoice(
+                principal,
+                id,
+                taxInvoiceIssueSchema.parse({ issueDate: issueDayOf(ym) }),
+              );
+              status = 'INVOICED';
+              tally.invoiced += 1;
+              continue;
+            }
+
+            if (status === 'INVOICED') {
+              const fresh = await prisma.settlement.findFirst({
+                where: { settlement_id: row.settlement_id },
+                select: {
+                  total_amount: true,
+                  paid_amount: true,
+                  payment_due_date: true,
+                  partner_name: true,
+                },
+              });
+              const remain = Number(fresh?.total_amount ?? 0) - Number(fresh?.paid_amount ?? 0);
+              // 부분수납은 남은 금액의 60%. `ck_settlement_paid` 가 과입금을
+              // 막으므로 남은 금액을 먼저 읽고 그 안에서 자른다.
+              const amount = partial ? Math.max(1, Math.round(remain * 0.6)) : remain;
+              if (amount <= 0) break;
+
+              await ledger.recordPayment(
+                principal,
+                paymentRecordSchema.parse({
+                  settlementId: id,
+                  paymentDate: payDayOf(fresh?.payment_due_date ?? null),
+                  paymentAmount: amount,
+                  bankName: '우리은행',
+                  depositorName: fresh?.partner_name ?? null,
+                  remark: partial ? '부분 입금 — 잔액 협의 중' : null,
+                }),
+              );
+              tally.paid += 1;
+              if (partial) break; // PARTIALLY_PAID 는 사다리 위로 더 안 올린다
+              status = 'PAID';
+              continue;
+            }
+
+            break; // 더 갈 곳이 없다
+          }
+        } catch (error) {
+          trouble.push(`${ym} ${type} ${id} — ${reasonOf(error)}`);
+        }
+      }
+    }
+  }
+
+  /*
+    마감은 맨 마지막에, 매출·매입을 **둘 다 만들고 난 뒤에** 한다.
+
+    `trg_actual_close_guard` 는 `settlement_type` 을 안 본다. 기간과 테넌트만
+    보고 막는다. 그래서 매출 6월을 닫는 순간 **매입 6월의 정산 생성도 같이
+    죽는다** — 정산을 만들면 `markSettled()` 가 실적에 표시를 남기는데, 그
+    UPDATE 가 가드에 걸린다. 앱의 `closedPeriod()` 는 유형을 가르지만 DB
+    트리거는 안 가르므로, 화면에는 "마감된 정산 기간입니다" 라는 매출 쪽
+    문구가 매입 작업 중에 뜬다.
+
+    한 달을 닫는다는 것은 그 달의 **실적을 통째로 얼린다**는 뜻이다. 매출만
+    닫고 매입은 열어 두는 상태는 이 스키마에 없다.
+
+    가장 오래된 달만 닫는다. `close()` 는 오래된 달부터 닫기를 강제하고
+    (`CLOSE_ORDER`), 완납된 정산만 CLOSED 로 옮긴다. 미수로 남긴 한 건은
+    INVOICED 인 채로 남아 수금 대상 목록에 계속 뜬다 — 마감은 기간을 잠그는
+    것이지 미수를 지우는 것이 아니다.
+  */
+  const oldest = months[0];
+  if (oldest !== undefined) {
+    for (const type of ['BILLING', 'PAYMENT'] as const) {
+      try {
+        await closing.close(
+          principal,
+          settlementCloseSchema.parse({
+            settlementType: type,
+            yearMonth: oldest,
+            remark: '데모 시드가 닫은 달',
+          }),
+        );
+        tally.closed += 1;
+      } catch (error) {
+        trouble.push(`${oldest} ${type} 마감 — ${reasonOf(error)}`);
+      }
+    }
+  }
+
+  console.log(
+    `정산 ${tally.created}건 · 수기 부대비 ${tally.charged}건 · 조정 ${tally.adjusted}건 ` +
+      `· 계산서 ${tally.invoiced}건 · 수납 ${tally.paid}건 · 마감 ${tally.closed}건`,
+  );
+  for (const line of trouble.slice(0, 10)) console.log(`  · ${line}`);
+  if (trouble.length > 10) console.log(`  · 외 ${trouble.length - 10}건`);
+}
+
+/** 서비스가 던진 것에서 사람이 읽을 문장만 꺼낸다 */
+function reasonOf(error: unknown): string {
+  if (error && typeof error === 'object' && 'message' in error) {
+    const m = (error as { message: unknown }).message;
+    if (typeof m === 'string') return m;
+    if (m && typeof m === 'object' && 'message' in m) {
+      return String((m as { message: unknown }).message);
+    }
+  }
+  return String(error);
+}
+
+/**
+ * 트립의 예상 운임 — 요율표로 뽑는다.
+ *
+ * 전에는 `거리 × 1650`(매출) · `거리 × 1280`(매입)이었다. 숫자는 그럴듯해
+ * 보였지만 **마진율이 22.4%에 박히고 km당 원가가 1280에 박혔다.** KPI 화면의
+ * 그 두 줄이 석 달 내내 자로 그은 듯 평평했고, 평평한 선은 지표가 아니라 상수다.
+ *
+ * 요율표를 태우면 차종 · 거리구간 · 최소운임 · 유류할증이 전부 들어가므로
+ * 값이 자연히 흩어진다. 더 중요한 것은 **정산이 나중에 같은 엔진으로 다시
+ * 계산한다**는 것이다. 예상과 확정이 같은 근거를 갖게 되므로, 둘이 크게
+ * 어긋나면 그건 데이터가 만든 착시가 아니라 운영에서 실제로 벌어진 일이 된다.
+ *
+ * ## 공통 거리요율만 태우는 이유
+ *
+ * 거래처 전용표(권역 · 전세차)는 여기서 안 쓴다. 트립은 여러 화주의 오더를
+ * 묶을 수 있어 이 시점에 거래처가 하나로 안 정해지고, 배정 전이라 운송사도
+ * 아직 없다. 전용표는 정산이 **거래처별로 묶은 뒤**에 걸린다 — 그때가 그
+ * 표를 쓸 수 있는 첫 시점이다. 그래서 예상은 공통표, 확정은 전용표가 되고,
+ * 그 차이가 정산 상세의 산출 계단에 그대로 남는다.
+ *
+ * ## 안 걸리면 옛 고정단가로 떨어진다
+ *
+ * 0원짜리 트립 하나가 그날 KPI 를 통째로 망가뜨린다. 표에 안 걸렸다는
+ * 사실은 실행 끝에 건수로 알린다 — 조용히 0을 내보내지 않는다.
+ */
+const rateBooks = new Map<string, RateBook>();
+let rateFallbackCount = 0;
+
+async function rateBookOf(
+  prisma: PrismaClient,
+  tenantId: bigint,
+  target: 'BILLING' | 'PAYMENT',
+  on: Date,
+): Promise<RateBook> {
+  // 유류할증은 월별이라 달이 키의 일부다. `dateOnly` 로 UTC 자정에 맞춰야
+  // 월말 저녁 트립이 다음 달 표를 집지 않는다.
+  const utc = dateOnly(on);
+  const ym = `${utc.getUTCFullYear()}${String(utc.getUTCMonth() + 1).padStart(2, '0')}`;
+  const key = `${target}:${ym}`;
+  const hit = rateBooks.get(key);
+  if (hit) return hit;
+  const book = await loadRateBook(prisma, tenantId, target, utc, ym);
+  rateBooks.set(key, book);
+  return book;
+}
+
+async function estimateFreight(
+  prisma: PrismaClient,
+  tenantId: bigint,
+  on: Date,
+  ctx: RateContext,
+): Promise<{ billing: number; payment: number; margin: number }> {
+  const [billingBook, paymentBook] = await Promise.all([
+    rateBookOf(prisma, tenantId, 'BILLING', on),
+    rateBookOf(prisma, tenantId, 'PAYMENT', on),
+  ]);
+
+  const b = calculateRate(ctx, billingBook.tablesFor(null), billingBook.fuel);
+  const p = calculateRate(ctx, paymentBook.tablesFor(null), paymentBook.fuel);
+  if (!b.matched || !p.matched) rateFallbackCount += 1;
+
+  const km = ctx.distanceKm ?? 0;
+  /*
+    부가세 포함 금액을 쓴다.
+
+    사다리(CashLadder)의 맨 윗단은 아직 정산에 안 묶인 실적의 이 금액을
+    더하고, 둘째 단부터는 정산 헤더의 `total_amount`(공급가+부가세)를 더한다.
+    한쪽만 공급가로 두면 두 단의 단위가 달라져 **폭이 실제보다 좁게** 그려진다.
+    마진율은 매출·매입 둘 다 10%가 붙어 비율이 그대로라 영향이 없다.
+  */
+  const billing = b.matched && b.totalAmount > 0 ? b.totalAmount : Math.round((km * 1650) / 1000) * 1000;
+  const payment = p.matched && p.totalAmount > 0 ? p.totalAmount : Math.round((km * 1280) / 1000) * 1000;
+  return { billing, payment, margin: billing - payment };
 }
 
 main().catch((error: unknown) => {

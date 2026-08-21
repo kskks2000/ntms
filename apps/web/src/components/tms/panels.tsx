@@ -60,7 +60,11 @@ export function Stat({
   tone = 'default',
 }: {
   label: string;
-  value: string | number;
+  /**
+   * 숫자가 대부분이지만 상태 칩이 오기도 한다(정산 상세의 「상태」 칸).
+   * 고정폭·자간은 아래 span 이 걸어 주므로 요소가 와도 줄이 안 흔들린다.
+   */
+  value: ReactNode;
   unit?: string;
   hint?: string;
   tone?: 'default' | 'accent' | 'warning' | 'danger';

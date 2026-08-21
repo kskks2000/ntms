@@ -14,6 +14,7 @@ import { ExecutionModule } from './execution/execution.module.js';
 import { ActualModule } from './actual/actual.module.js';
 import { NaverModule } from './naver/naver.module.js';
 import { SystemModule } from './system/system.module.js';
+import { SettlementModule } from './settlement/settlement.module.js';
 import { AllExceptionsFilter } from './common/all-exceptions.filter.js';
 
 @Module({
@@ -41,7 +42,7 @@ import { AllExceptionsFilter } from './common/all-exceptions.filter.js';
     ActualModule,
     NaverModule,
     SystemModule,
-    // 남은 도메인 모듈: SettlementModule
+    SettlementModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
