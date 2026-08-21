@@ -13,6 +13,7 @@ import { PlanModule } from './plan/plan.module.js';
 import { ExecutionModule } from './execution/execution.module.js';
 import { ActualModule } from './actual/actual.module.js';
 import { NaverModule } from './naver/naver.module.js';
+import { SystemModule } from './system/system.module.js';
 import { AllExceptionsFilter } from './common/all-exceptions.filter.js';
 
 @Module({
@@ -39,6 +40,7 @@ import { AllExceptionsFilter } from './common/all-exceptions.filter.js';
     ExecutionModule,
     ActualModule,
     NaverModule,
+    SystemModule,
     // 남은 도메인 모듈: SettlementModule
   ],
   providers: [

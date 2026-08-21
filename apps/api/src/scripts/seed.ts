@@ -232,6 +232,175 @@ const NUMBERING = [
   { code: 'SETTLEMENT', name: '정산', prefix: 'ST', reset: 'MONTHLY' },
 ];
 
+// ---------------------------------------------------------------------
+// 공통코드
+//
+// DB 열거형(ntms.order_type 등)이 이미 잡고 있는 것은 여기 넣지 않는다.
+// 공통코드는 **회사마다 다르고 운영 중에 늘어나는 것** 만 담는다 —
+// 지연 사유를 하나 추가하려고 배포를 하면 안 되기 때문이다.
+//
+// 시드가 화면을 위해 일부러 만드는 것 셋:
+//   · is_system 그룹 하나  — 잠긴 그룹이 어떻게 보이는지
+//   · 꺼 둔 코드 몇 개      — 미리보기에서 사라지는 것을 볼 수 있게
+//   · 계층 한 벌            — 미리보기가 들여쓰기로 접히는 것을 볼 수 있게
+// ---------------------------------------------------------------------
+interface CodeSeed {
+  value: string;
+  name: string;
+  nameEn?: string;
+  /** 상위 코드값. 계층형에서만 */
+  parent?: string;
+  attr1?: string;
+  active?: boolean;
+}
+
+interface CodeGroupSeed {
+  code: string;
+  name: string;
+  description: string;
+  /** true = 앱이 코드값을 직접 참조한다. 화면에서 잠근다 */
+  system?: boolean;
+  /** true = tenant_id NULL. 모든 회사가 같이 쓴다 */
+  shared?: boolean;
+  codes: CodeSeed[];
+}
+
+const CODE_GROUPS: CodeGroupSeed[] = [
+  {
+    code: 'DELAY_REASON',
+    name: '지연 사유',
+    description: '관제에서 지연을 등록할 때 고르는 사유. 정산 귀책을 가르는 근거가 된다.',
+    codes: [
+      { value: 'TRAFFIC', name: '교통 정체', nameEn: 'Traffic', attr1: '불가항력' },
+      { value: 'WEATHER', name: '기상 악화', nameEn: 'Weather', attr1: '불가항력' },
+      { value: 'LOADING', name: '상차 지연', nameEn: 'Loading delay', attr1: '화주' },
+      { value: 'DOCK_WAIT', name: '하차 대기', nameEn: 'Dock waiting', attr1: '화주' },
+      { value: 'BREAKDOWN', name: '차량 고장', nameEn: 'Breakdown', attr1: '운송사' },
+      { value: 'DRIVER', name: '기사 사정', nameEn: 'Driver', attr1: '운송사' },
+      // 쓰다가 접은 사유. 미리보기에서 사라지는 것을 보여 준다.
+      { value: 'STRIKE', name: '파업', nameEn: 'Strike', attr1: '불가항력', active: false },
+    ],
+  },
+  {
+    code: 'CARGO_TYPE',
+    name: '화물 유형',
+    description: '오더 등록에서 고른다. 차종 적합성과 부대비 산정에 쓰인다.',
+    codes: [
+      { value: 'GENERAL', name: '일반', nameEn: 'General' },
+      { value: 'CHILLED', name: '냉장', nameEn: 'Chilled', attr1: '0~10도' },
+      { value: 'FROZEN', name: '냉동', nameEn: 'Frozen', attr1: '-18도 이하' },
+      { value: 'HAZARD', name: '위험물', nameEn: 'Hazardous' },
+      { value: 'HEAVY', name: '중량물', nameEn: 'Heavy' },
+      { value: 'FRAGILE', name: '파손주의', nameEn: 'Fragile' },
+    ],
+  },
+  {
+    code: 'PACKING_TYPE',
+    name: '포장 형태',
+    description: '오더 품목의 포장 단위. 팔레트 환산과 적재 판정의 입력이다.',
+    codes: [
+      { value: 'PALLET', name: '팔레트', nameEn: 'Pallet', attr1: 'T11' },
+      { value: 'BOX', name: '박스', nameEn: 'Box' },
+      { value: 'BAG', name: '마대', nameEn: 'Bag' },
+      { value: 'DRUM', name: '드럼', nameEn: 'Drum' },
+      { value: 'ROLL', name: '롤', nameEn: 'Roll' },
+      { value: 'BULK', name: '벌크', nameEn: 'Bulk' },
+    ],
+  },
+  {
+    code: 'POD_FLAW',
+    name: '인수 이상 사유',
+    description: '인수증에 이상이 있을 때 고른다. 손해배상 구상의 첫 근거다.',
+    codes: [
+      { value: 'SHORTAGE', name: '수량 부족', nameEn: 'Shortage' },
+      { value: 'DAMAGE', name: '파손', nameEn: 'Damage' },
+      { value: 'WET', name: '침수 · 습기', nameEn: 'Water damage' },
+      { value: 'TEMP', name: '온도 이탈', nameEn: 'Temperature deviation' },
+      { value: 'WRONG', name: '오배송', nameEn: 'Misdelivery' },
+      { value: 'REFUSED', name: '인수 거부', nameEn: 'Refused' },
+    ],
+  },
+  {
+    code: 'ORG_UNIT',
+    name: '조직 · 부서',
+    description: '계정을 소속으로 묶는다. 상위 조직 아래로 접힌다.',
+    codes: [
+      { value: 'HQ', name: '본사' },
+      { value: 'HQ_PLAN', name: '운영기획팀', parent: 'HQ' },
+      { value: 'HQ_SETTLE', name: '정산팀', parent: 'HQ' },
+      { value: 'HQ_IT', name: '정보시스템팀', parent: 'HQ' },
+      { value: 'CENTER', name: '물류센터' },
+      { value: 'CT_SEOUL', name: '수도권센터', parent: 'CENTER' },
+      { value: 'CT_JUNGBU', name: '중부센터', parent: 'CENTER' },
+      { value: 'CT_YEONGNAM', name: '영남센터', parent: 'CENTER' },
+      // 통폐합된 센터. 부모는 살아 있어도 자기는 미리보기에서 빠진다.
+      { value: 'CT_HONAM', name: '호남센터', parent: 'CENTER', active: false },
+    ],
+  },
+  {
+    code: 'SURCHARGE_REASON',
+    name: '부대비 발생 사유',
+    description: '정산 부대비 라인에 붙는 사유. 증빙 요구 여부가 여기서 갈린다.',
+    codes: [
+      { value: 'WAITING', name: '대기 발생', attr1: '증빙필요' },
+      { value: 'EXTRA_STOP', name: '경유지 추가', attr1: '증빙필요' },
+      { value: 'HANDLING', name: '하역 지원' },
+      { value: 'TOLL', name: '통행료', attr1: '증빙필요' },
+      { value: 'ISLAND', name: '도서산간' },
+      { value: 'NIGHT', name: '야간 · 휴일' },
+    ],
+  },
+  {
+    code: 'CANCEL_REASON',
+    name: '오더 취소 사유',
+    description: '오더를 취소할 때 고른다. 화주 귀책과 자사 귀책을 가른다.',
+    codes: [
+      { value: 'SHIPPER_REQ', name: '화주 요청', attr1: '화주' },
+      { value: 'STOCK_OUT', name: '재고 부족', attr1: '화주' },
+      { value: 'DUP', name: '중복 등록', attr1: '자사' },
+      { value: 'NO_VEHICLE', name: '차량 수배 실패', attr1: '자사' },
+      { value: 'CONSIGNEE_REQ', name: '수하처 요청', attr1: '수하처' },
+    ],
+  },
+  {
+    code: 'DOC_TYPE',
+    name: '첨부 문서 유형',
+    description: '파일을 올릴 때 무엇인지 고른다.',
+    codes: [
+      { value: 'POD', name: '인수증' },
+      { value: 'TAX_INVOICE', name: '세금계산서' },
+      { value: 'CONTRACT', name: '계약서' },
+      { value: 'PHOTO', name: '현장 사진' },
+      { value: 'CLAIM', name: '사고 · 클레임 자료' },
+      { value: 'ETC', name: '기타' },
+    ],
+  },
+  {
+    code: 'SYS_LOCALE',
+    name: '표시 언어',
+    description: '앱이 코드값을 직접 참조한다. 값이 바뀌면 화면이 언어를 못 찾는다.',
+    system: true,
+    codes: [
+      { value: 'KO_KR', name: '한국어', nameEn: 'Korean' },
+      { value: 'EN_US', name: '영어', nameEn: 'English' },
+      { value: 'JA_JP', name: '일본어', nameEn: 'Japanese', active: false },
+    ],
+  },
+  {
+    code: 'INCOTERMS',
+    name: '인코텀즈',
+    description: '국제 표준이라 회사가 고칠 수 없다. 모든 테넌트가 같은 표를 본다.',
+    shared: true,
+    codes: [
+      { value: 'EXW', name: '공장인도', nameEn: 'Ex Works' },
+      { value: 'FCA', name: '운송인인도', nameEn: 'Free Carrier' },
+      { value: 'CPT', name: '운송비지급인도', nameEn: 'Carriage Paid To' },
+      { value: 'DAP', name: '도착지인도', nameEn: 'Delivered At Place' },
+      { value: 'DDP', name: '관세지급인도', nameEn: 'Delivered Duty Paid' },
+    ],
+  },
+];
+
 async function main(): Promise<void> {
   const url = process.env.ADMIN_DATABASE_URL;
   if (!url) {
@@ -449,10 +618,83 @@ async function main(): Promise<void> {
       console.log(`초기 비밀번호: ${DEMO.adminPassword}  ← 첫 로그인 후 변경 필요`);
     }
 
+    await seedCodes(prisma, tenant.tenant_id);
+
     console.log('\n완료.');
   } finally {
     await prisma.$disconnect();
   }
+}
+
+/**
+ * 공통코드 적재.
+ *
+ * 멱등이어야 한다 — 시드는 배포할 때마다 다시 돈다. 그런데 **이미 있는
+ * 코드의 이름과 순서는 덮어쓰지 않는다.** 운영자가 화면에서 고쳐 둔 것을
+ * 배포가 되돌리면 그 화면은 두 번 다시 쓰이지 않는다. 새로 생긴 것만
+ * 넣고 나머지는 그대로 둔다.
+ */
+async function seedCodes(prisma: PrismaClient, tenantId: bigint): Promise<void> {
+  let groupCount = 0;
+  let codeCount = 0;
+
+  for (const [gi, g] of CODE_GROUPS.entries()) {
+    const tenant = g.shared ? null : tenantId;
+
+    let group = await prisma.code_group.findFirst({
+      where: { group_code: g.code, tenant_id: tenant },
+      select: { code_group_id: true },
+    });
+    if (!group) {
+      group = await prisma.code_group.create({
+        data: {
+          tenant_id: tenant,
+          group_code: g.code,
+          group_name: g.name,
+          description: g.description,
+          is_system: g.system ?? false,
+          sort_order: (gi + 1) * 10,
+          is_active: true,
+        },
+        select: { code_group_id: true },
+      });
+      groupCount += 1;
+    }
+
+    // 부모를 먼저 넣어야 자식이 물 수 있다. 시드 배열의 순서가 그것이다.
+    const idByValue = new Map<string, bigint>();
+    for (const [ci, c] of g.codes.entries()) {
+      const existing = await prisma.code.findFirst({
+        where: { code_group_id: group.code_group_id, code_value: c.value },
+        select: { code_id: true },
+      });
+      if (existing) {
+        idByValue.set(c.value, existing.code_id);
+        continue;
+      }
+
+      const created = await prisma.code.create({
+        data: {
+          code_group_id: group.code_group_id,
+          tenant_id: tenant,
+          code_value: c.value,
+          code_name: c.name,
+          code_name_en: c.nameEn ?? null,
+          parent_code_id: c.parent ? (idByValue.get(c.parent) ?? null) : null,
+          // 10 단위로 벌려 둔다. 사이에 한 줄 끼울 때 전체를 다시 매기지
+          // 않아도 된다. 화면의 순서 저장도 같은 규칙을 쓴다.
+          sort_order: (ci + 1) * 10,
+          attr1: c.attr1 ?? null,
+          is_active: c.active ?? true,
+        },
+        select: { code_id: true },
+      });
+      idByValue.set(c.value, created.code_id);
+      codeCount += 1;
+    }
+  }
+
+  console.log(`공통코드 그룹 ${groupCount}건 · 코드 ${codeCount}건 (이미 있는 것은 두었다)`);
 }
 
 async function upsertMenu(

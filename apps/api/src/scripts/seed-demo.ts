@@ -17,6 +17,7 @@
  * ADMIN_DATABASE_URL 로 접속한다. 마이그레이션·초기적재와 같은 성격이며
  * 운영 DB 에서는 실행하지 않는다.
  */
+import { hash as argon2 } from '@node-rs/argon2';
 import { PrismaClient } from '@ntms/db';
 import type { OrderStatus, TripStatus } from '@ntms/shared';
 // 실적과 집계는 앱이 쓰는 함수를 그대로 부른다. 시드가 자기 계산을 따로
@@ -316,6 +317,93 @@ const ITEM_NAMES = [
   '생활용품 혼적', '가공식품 혼적', '음료 팔레트',
 ] as const;
 
+// ---------------------------------------------------------------------
+// 데모 계정
+//
+// 사용자 · 권한 화면은 계정이 두 개면 아무것도 못 보여 준다. 권한 격자는
+// **서로 다른 도달 범위를 나란히 놓았을 때** 비로소 뜻이 생기고, 접근 상태
+// 칸은 막힌 계정이 하나도 없으면 늘 초록불이다.
+//
+// 그래서 시드가 일부러 만드는 것:
+//   · 역할이 겹치는 사람 — 한 권한을 두 역할이 켤 때 화면이 둘 다 적는지
+//   · 잠긴 계정          — 잠금 해제 흐름을 밟을 자리
+//   · 실패가 쌓인 계정   — "2회 더 틀리면 잠깁니다" 가 뜨는 자리
+//   · 비밀번호 만료 임박 · 만료  — 만료 막대가 색을 바꾸는 자리
+//   · 한 번도 안 들어온 계정 · 오래 안 들어온 계정
+// ---------------------------------------------------------------------
+interface DemoUser {
+  loginId: string;
+  name: string;
+  email: string;
+  mobile: string;
+  roles: string[];
+  type?: 'INTERNAL' | 'SHIPPER' | 'CARRIER' | 'DRIVER';
+  status?: 'ACTIVE' | 'LOCKED' | 'DORMANT' | 'SUSPENDED';
+  /** 비밀번호를 바꾼 지 며칠 됐나. 만료는 90일 */
+  pwAgeDays?: number;
+  /** 마지막 접속이 며칠 전인가. null 이면 한 번도 안 들어왔다 */
+  lastLoginDaysAgo?: number | null;
+  failCount?: number;
+  mfa?: boolean;
+}
+
+const DEMO_USERS: DemoUser[] = [
+  // --- 운영 -------------------------------------------------------
+  { loginId: 'jhkim', name: '김진호', email: 'jhkim@ntms.example', mobile: '010-2841-7712',
+    roles: ['DISPATCHER'], lastLoginDaysAgo: 0, pwAgeDays: 12, mfa: true },
+  { loginId: 'sylee', name: '이수연', email: 'sylee@ntms.example', mobile: '010-3355-2084',
+    roles: ['DISPATCHER'], lastLoginDaysAgo: 0, pwAgeDays: 41 },
+  { loginId: 'mjpark', name: '박민재', email: 'mjpark@ntms.example', mobile: '010-9902-4417',
+    roles: ['DISPATCHER'], lastLoginDaysAgo: 1, pwAgeDays: 78 },
+  // 배차와 정산을 겸한다. 격자에서 두 역할이 겹치는 칸이 생긴다.
+  { loginId: 'hwchoi', name: '최현우', email: 'hwchoi@ntms.example', mobile: '010-4471-9930',
+    roles: ['DISPATCHER', 'SETTLEMENT'], lastLoginDaysAgo: 0, pwAgeDays: 30, mfa: true },
+
+  // --- 정산 -------------------------------------------------------
+  { loginId: 'ejyoon', name: '윤은지', email: 'ejyoon@ntms.example', mobile: '010-7788-1245',
+    roles: ['SETTLEMENT'], lastLoginDaysAgo: 0, pwAgeDays: 5, mfa: true },
+  // 만료가 코앞. 만료 막대가 주의색으로 바뀐다.
+  { loginId: 'dhjang', name: '장도현', email: 'dhjang@ntms.example', mobile: '010-2093-6614',
+    roles: ['SETTLEMENT'], lastLoginDaysAgo: 2, pwAgeDays: 83 },
+
+  // --- 조회 -------------------------------------------------------
+  { loginId: 'yjseo', name: '서예진', email: 'yjseo@ntms.example', mobile: '010-5520-3378',
+    roles: ['VIEWER'], lastLoginDaysAgo: 3, pwAgeDays: 22 },
+  // 넉 달째 안 들어온다. 오래된 계정으로 잡힌다.
+  { loginId: 'ghan', name: '한규성', email: 'ghan@ntms.example', mobile: '010-6614-8802',
+    roles: ['VIEWER'], lastLoginDaysAgo: 128, pwAgeDays: 128 },
+  // 만든 뒤 한 번도 안 들어왔다.
+  { loginId: 'nrshin', name: '신나라', email: 'nrshin@ntms.example', mobile: '010-3312-7749',
+    roles: ['VIEWER'], lastLoginDaysAgo: null, pwAgeDays: 0 },
+
+  // --- 손이 필요한 계정 -------------------------------------------
+  // 다섯 번 틀려 잠겼다. 잠금 해제 흐름을 여기서 밟는다.
+  { loginId: 'bwoh', name: '오병우', email: 'bwoh@ntms.example', mobile: '010-8845-1120',
+    roles: ['DISPATCHER'], status: 'LOCKED', failCount: 5, lastLoginDaysAgo: 6, pwAgeDays: 64 },
+  // 세 번 틀렸다. "2회 더 틀리면 잠깁니다".
+  { loginId: 'sjna', name: '나승주', email: 'sjna@ntms.example', mobile: '010-1174-5583',
+    roles: ['SETTLEMENT'], failCount: 3, lastLoginDaysAgo: 1, pwAgeDays: 55 },
+  // 비밀번호가 이미 만료됐다.
+  { loginId: 'kmryu', name: '류경민', email: 'kmryu@ntms.example', mobile: '010-9930-2261',
+    roles: ['VIEWER'], lastLoginDaysAgo: 95, pwAgeDays: 96 },
+  // 반 년 넘게 안 써서 휴면.
+  { loginId: 'twgo', name: '고태욱', email: 'twgo@ntms.example', mobile: '010-4402-8817',
+    roles: ['DISPATCHER'], status: 'DORMANT', lastLoginDaysAgo: 214, pwAgeDays: 214 },
+
+  // --- 외부 -------------------------------------------------------
+  { loginId: 'shipper.hanmi', name: '정유라', email: 'yr.jung@hanmi.example', mobile: '010-2277-9014',
+    roles: ['SHIPPER_USER'], type: 'SHIPPER', lastLoginDaysAgo: 1, pwAgeDays: 18 },
+  { loginId: 'shipper.daesung', name: '문상혁', email: 'sh.moon@daesung.example', mobile: '010-6690-3325',
+    roles: ['SHIPPER_USER'], type: 'SHIPPER', lastLoginDaysAgo: 4, pwAgeDays: 47 },
+  { loginId: 'carrier.hangyeol', name: '임재원', email: 'jw.lim@hangyeol.example', mobile: '010-3308-7756',
+    roles: ['CARRIER_USER'], type: 'CARRIER', lastLoginDaysAgo: 0, pwAgeDays: 9 },
+  { loginId: 'carrier.shinheung', name: '강보라', email: 'br.kang@shinheung.example', mobile: '010-5541-2298',
+    roles: ['CARRIER_USER'], type: 'CARRIER', lastLoginDaysAgo: 2, pwAgeDays: 62 },
+  // 계약이 끝나 막아 둔 외부 계정.
+  { loginId: 'carrier.former', name: '조성재', email: 'sj.cho@former.example', mobile: '010-7712-4409',
+    roles: ['CARRIER_USER'], type: 'CARRIER', status: 'SUSPENDED', lastLoginDaysAgo: 71, pwAgeDays: 71 },
+];
+
 async function main(): Promise<void> {
   const url = process.env.ADMIN_DATABASE_URL;
   if (!url) throw new Error('ADMIN_DATABASE_URL 이 필요합니다.');
@@ -355,6 +443,26 @@ async function main(): Promise<void> {
         그것들보다 먼저 나간다. 새 자식 테이블을 만들면 여기에도 넣을 것 —
         빠뜨리면 다음 --reset 이 FK 로 죽는다.
       */
+      /*
+        데모 계정. user_role 을 먼저 지우고 계정을 지운다.
+
+        `admin` 은 목록에서 빼고 지운다 — 시드가 관리자를 날리면 그 순간
+        아무도 못 들어온다. 로그인 이력과 세션은 계정을 FK 로 물고 있으므로
+        같이 지운다.
+      */
+      const demoLoginIds = DEMO_USERS.map((u) => u.loginId);
+      const demoUsers = await prisma.user_account.findMany({
+        where: { tenant_id: tenantId, login_id: { in: demoLoginIds } },
+        select: { user_id: true },
+      });
+      const demoUserIds = demoUsers.map((u) => u.user_id);
+      if (demoUserIds.length > 0) {
+        await prisma.user_role.deleteMany({ where: { user_id: { in: demoUserIds } } });
+        await prisma.user_session.deleteMany({ where: { user_id: { in: demoUserIds } } });
+        await prisma.login_history.deleteMany({ where: { user_id: { in: demoUserIds } } });
+        await prisma.user_account.deleteMany({ where: { user_id: { in: demoUserIds } } });
+      }
+
       await prisma.kpi_daily.deleteMany({ where: { tenant_id: tenantId } });
       await prisma.driver_work_log.deleteMany({ where: { tenant_id: tenantId } });
       await prisma.vehicle_operation_daily.deleteMany({ where: { tenant_id: tenantId } });
@@ -390,6 +498,8 @@ async function main(): Promise<void> {
       );
       return;
     }
+
+    await seedDemoUsers(prisma, tenantId);
 
     // --- 권역 -------------------------------------------------------
     const zoneId = new Map<string, bigint>();
@@ -2230,6 +2340,141 @@ async function main(): Promise<void> {
   } finally {
     await prisma.$disconnect();
   }
+}
+
+/**
+ * 데모 계정을 만든다.
+ *
+ * 비밀번호는 전부 같다. 데모 데이터라 감출 것이 없고, 다르게 두면 화면을
+ * 확인하려는 사람이 계정마다 비밀번호를 찾아 다녀야 한다. **가동계에서는
+ * 이 시드를 돌리지 않는다** — 돌리면 알려진 비밀번호 계정이 열여덟 개
+ * 생긴다.
+ *
+ * 로그인 이력도 같이 만든다. 계정 상세의 "최근 접속" 이 비어 있으면
+ * 그 칸이 무엇을 위한 자리인지 알 수 없다.
+ */
+const DEMO_USER_PASSWORD = 'Ntms@2026!demo';
+
+/** seed.ts 와 같은 파라미터. 다르면 같은 비밀번호가 다른 해시가 된다 */
+const ARGON2_OPTIONS = { algorithm: 2, memoryCost: 19_456, timeCost: 2, parallelism: 1 } as const;
+
+const argon2Hash = (plain: string) => argon2(plain, ARGON2_OPTIONS);
+
+async function seedDemoUsers(prisma: PrismaClient, tenantId: bigint): Promise<void> {
+  const roles = await prisma.role.findMany({ select: { role_id: true, role_code: true } });
+  const roleIdByCode = new Map(roles.map((r) => [r.role_code, r.role_id]));
+
+  const hash = await argon2Hash(DEMO_USER_PASSWORD);
+  const now = new Date();
+  let created = 0;
+  let historyCount = 0;
+
+  for (const u of DEMO_USERS) {
+    const exists = await prisma.user_account.findFirst({
+      where: { tenant_id: tenantId, login_id: u.loginId },
+      select: { user_id: true },
+    });
+    if (exists) continue;
+
+    const pwAge = u.pwAgeDays ?? 30;
+    const changedAt = new Date(now.getTime() - pwAge * 86_400_000);
+    const lastLoginAt =
+      u.lastLoginDaysAgo === null || u.lastLoginDaysAgo === undefined
+        ? null
+        : new Date(now.getTime() - u.lastLoginDaysAgo * 86_400_000);
+
+    const account = await prisma.user_account.create({
+      data: {
+        tenant_id: tenantId,
+        login_id: u.loginId,
+        password_hash: hash,
+        password_algo: 'argon2id',
+        password_changed_at: changedAt,
+        // 정책은 90일이다. 나이에서 거꾸로 만들어야 만료 임박·만료가 갈린다.
+        password_expire_at: new Date(changedAt.getTime() + 90 * 86_400_000),
+        must_change_password: false,
+        user_name: u.name,
+        email: u.email,
+        mobile: u.mobile,
+        // zod 없이 쓰는 리터럴이라 Prisma enum 으로 좁혀 준다
+        user_type: (u.type ?? 'INTERNAL') as never,
+        status: u.status ?? 'ACTIVE',
+        login_fail_count: u.failCount ?? 0,
+        locked_at: u.status === 'LOCKED' ? new Date(now.getTime() - 6 * 86_400_000) : null,
+        dormant_at: u.status === 'DORMANT' ? new Date(now.getTime() - 30 * 86_400_000) : null,
+        last_login_at: lastLoginAt,
+        last_login_ip: lastLoginAt ? '10.30.14.' + (10 + (created % 40)) : null,
+        mfa_enabled: u.mfa ?? false,
+        agree_terms_at: changedAt,
+        agree_privacy_at: changedAt,
+        is_active: u.status !== 'SUSPENDED',
+      },
+      select: { user_id: true },
+    });
+
+    for (const code of u.roles) {
+      const roleId = roleIdByCode.get(code);
+      if (roleId) {
+        await prisma.user_role.create({
+          data: { tenant_id: tenantId, user_id: account.user_id, role_id: roleId },
+        });
+      }
+    }
+
+    /*
+      로그인 이력.
+
+      성공만 넣으면 실패 사유 칸이 늘 비고, 잠긴 계정의 상세를 열어도 왜
+      잠겼는지가 안 보인다. 잠긴 계정에는 연속 실패를 그대로 남긴다 —
+      그게 그 계정이 잠긴 이유이기 때문이다.
+    */
+    if (lastLoginAt) {
+      const fails = u.status === 'LOCKED' ? (u.failCount ?? 5) : (u.failCount ?? 0);
+      for (let i = 0; i < fails; i += 1) {
+        await prisma.login_history.create({
+          data: {
+            tenant_id: tenantId,
+            user_id: account.user_id,
+            login_id: u.loginId,
+            login_type: 'PASSWORD',
+            // login_result 는 FAIL 이 아니라 실패 종류를 든다. 화면이
+            // 왜 막혔는지를 사유 문구 없이도 읽을 수 있게 하려는 것이다.
+            login_result: 'FAIL_PASSWORD',
+            fail_reason: '비밀번호 불일치',
+            ip_address: '10.30.14.' + (10 + (created % 40)),
+            device_type: 'PC',
+            user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+            login_at: new Date(lastLoginAt.getTime() + (i + 1) * 90_000),
+          },
+        });
+        historyCount += 1;
+      }
+
+      for (let i = 0; i < 5; i += 1) {
+        await prisma.login_history.create({
+          data: {
+            tenant_id: tenantId,
+            user_id: account.user_id,
+            login_id: u.loginId,
+            login_type: 'PASSWORD',
+            login_result: 'SUCCESS',
+            ip_address: '10.30.14.' + (10 + (created % 40)),
+            device_type: i % 4 === 3 ? 'MOBILE' : 'PC',
+            user_agent:
+              i % 4 === 3
+                ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)'
+                : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+            login_at: new Date(lastLoginAt.getTime() - i * 86_400_000),
+          },
+        });
+        historyCount += 1;
+      }
+    }
+
+    created += 1;
+  }
+
+  console.log(`데모 계정 ${created}명 · 로그인 이력 ${historyCount}건`);
 }
 
 main().catch((error: unknown) => {
