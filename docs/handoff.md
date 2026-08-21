@@ -5,7 +5,7 @@
 `docs/design-system.md` 에 있으므로 여기서는 링크만 걸고 **그 문서들에 없는
 것** — 지금까지 내린 판단과 그 이유, 밟았던 지뢰 — 을 적는다.
 
-마지막 갱신: 2026-08-20 (커밋 `f48e015` 운송실행 · 트래킹)
+마지막 갱신: 2026-08-21 (커밋 `30d1656` 시스템관리)
 
 ---
 
@@ -17,8 +17,11 @@
 
 ```
 오더 접수 → 편성 → 배정 → 배차 → 실행·트래킹 → 실적 확정 → 정산
-   ✅        ✅     ✅     ✅        ✅            ⬜         ⬜
+   ✅        ✅     ✅     ✅        ✅            ✅         ⬜
 ```
+
+곁들여 시스템관리(사용자·권한 · 공통코드 · 감사로그)도 서 있다. 파이프라인
+바깥이지만 대기업 도입에서 먼저 묻는 것이 계정과 감사라 같이 만들었다.
 
 ---
 
@@ -39,11 +42,18 @@
 | `/execution/tracking` | 실시간 추적 | 번호 하나로 찾는다 |
 | `/execution/exceptions` | 운송 예외 | 건수가 아니라 까먹은 시간 |
 | `/execution/pod` | 인수증(POD) | 쌓인 서류가 아니라 빠진 서류 |
+| `/actuals` `/[id]` | 운송실적 · 상세 | **편차 축** (VarianceSpine) · 확정 관문 |
+| `/actuals/daily` | 운행일보 | 차량마다 하루를 띠로 (DayBand) |
+| `/actuals/kpi` | KPI 현황 | 점이 아니라 선 (KpiStrip) |
+| `/system/users` | 사용자 · 권한 | **권한 격자** — 오른쪽이 위험하다 (ReachGrid) |
+| `/system/codes` | 공통코드 | 끄면 무엇이 사라지나 — 드롭다운 미리보기 |
+| `/system/audit` | 감사로그 | **변경 축** — 바뀐 칸만 (DiffSpine) |
 
-### 남은 범위 (사용자가 선언한 순서)
+### 남은 범위
 
-1. **실적 관리 및 확정** — 메뉴 `/actuals`, `/actuals/daily`(운행일보), `/actuals/kpi`
-2. **매출/매입 정산** — 메뉴 `/settlements/billing`, `/payment`, `/invoices`, `/close`
+**매출/매입 정산** — 메뉴 `/settlements/billing`, `/payment`, `/invoices`, `/close`.
+파이프라인의 마지막 칸이고, 이것을 채우면 오더에서 돈까지가 닫힌다.
+자세한 것은 10절.
 
 미구현 메뉴를 누르면 `apps/web/src/app/(app)/[...slug]` 가 "준비 중" 화면을 낸다.
 
@@ -51,8 +61,12 @@
 
 - 거점 좌표 일괄 지오코딩 버튼 (`/naver/geocode` 창구는 이미 있다)
 - 운송사 포털 (운송사가 직접 배차 수락·실적 입력)
-- 오더 예상 운임 계산 (요율표는 이미 있다)
+- 오더 예상 운임 계산 (요율표는 이미 있다 — 정산의 `calculateRate()` 를 만들면
+  그대로 쓸 수 있다)
 - 오더 목록 내려받기(엑셀)
+- 부대비 유형(`surcharge_type`) 관리 화면 — 지금은 시드로만 채운다
+- 역할 편집 화면 — 역할은 시드가 만들고 화면은 읽기만 한다
+- 세금계산서 국세청 실연동 (`tax_invoice.nts_*` 칸은 있으나 전송은 안 붙였다)
 - HTTPS — 사용자가 "나중에 계획 생기면 그때" 라고 했다
 
 ---
@@ -60,7 +74,8 @@
 ## 3. 구조
 
 ```
-apps/api      NestJS 11  :4000   도메인 모듈 = auth dashboard dispatch master order plan execution naver
+apps/api      NestJS 11  :4000   도메인 모듈 = auth dashboard dispatch master
+                                     order plan execution actual system naver
 apps/web      Next.js 15 :3000   App Router · React 19
 packages/shared  zod 3            타입 + **화면과 서버가 같이 쓰는 판정 함수**
 packages/db      Prisma 6         db pull 로 생성. 스키마는 SQL 이 원본이다
@@ -80,6 +95,8 @@ docker/          가동계 배포
 | `order-detail.ts` | `evaluateSpine()` — 시간창이 성립하는가 |
 | `plan.ts` | `buildLoadProfile()` `deriveStops()` `checkPrecedence()` |
 | `execution.ts` | `buildCascade()` — 지연이 뒤로 어떻게 번지나 |
+| `actual.ts` | `evaluateConfirmGate()` — 정산에 넘겨도 되는가 · `buildVariance()` |
+| `system.ts` | `buildReachGrid()` — 권한이 어디까지 닿나 · `diffSnapshot()` · `buildCodePreview()` |
 
 ---
 
@@ -111,6 +128,20 @@ ntms_admin  BYPASSRLS  시드·점검 전용. 앱 컨테이너에 절대 넣지 
 오더 상태는 **한 칸씩만** 넘어간다. `RECEIVED → PLANNED` 는 규칙이 막으므로
 `plan.service.ts` 의 `advanceOrders()` 가 `ORDER_FLOW` 를 따라 두 번 밟는다.
 
+### 권한 가드는 실제로 집행되어야 한다
+
+`@Roles('ADMIN')` 은 데코레이터일 뿐이고, 그것을 읽는 `RolesGuard` 가
+`AuthModule` 에 `APP_GUARD` 로 등록되어 있어야 효력이 생긴다. 순서도 중요하다 —
+`JwtAuthGuard` 다음에 와야 `req.user` 가 채워져 있다.
+
+가드 없이 데코레이터만 붙은 상태는 **조용히 열린 문**이다. 붙인 쪽은 잠갔다고
+믿고, 실제로는 로그인한 누구나 들어온다. 오류가 안 나므로 아무도 눈치 못 챈다.
+시스템관리를 만들 때 이 상태를 발견해서 가드를 채워 넣었다.
+
+역할은 액세스 토큰(`rol`)에서 온다. 토큰 수명이 15분이라 역할을 회수해도 최대
+15분은 남는다. **되돌릴 수 없는 동작**(정산 승인 · 계정 삭제)은 가드만 믿지
+말고 서비스에서 DB 의 현재 역할을 다시 볼 것.
+
 ### 날짜 · 시각
 
 - `date` 컬럼에 넣을 값은 반드시 **UTC 자정**으로 만든다. 로컬 자정으로 만든
@@ -139,12 +170,16 @@ pnpm db:create
 PGCLIENTENCODING=UTF8 pnpm db:ddl          # Windows 는 인코딩 고정 필수
 MIGRATE_TARGET=native bash db/migrate.sh
 pnpm db:pull                                # Prisma 모델 · 클라이언트
-pnpm --filter @ntms/api seed                # 권한 · 역할 · 메뉴 · 테넌트 · 관리자
-pnpm --filter @ntms/api seed:demo -- --reset  # 데모 운영 데이터
+pnpm --filter @ntms/api seed                # 권한 · 역할 · 메뉴 · 테넌트 · 관리자 · 공통코드
+pnpm --filter @ntms/api seed:demo -- --reset  # 데모 운영 데이터 + 데모 계정 18명
 pnpm dev                                    # api :4000 + web :3000
 ```
 
 `http://localhost:3000/login` → `NTMS` / `admin` / `Ntms@2026!log`
+
+데모 계정 18명(`jhkim` `sylee` `bwoh` …)의 비밀번호는 `DEMO_USER_PASSWORD`
+환경변수로 정하고, 안 주면 로컬 기본값을 쓴다. **가동계에서는 반드시 넣는다**
+— 안 넣으면 저장소에 적힌 비밀번호 계정이 열여덟 개 생긴다. 6절 참고.
 
 ### 자주 밟는 것
 
@@ -154,6 +189,8 @@ pnpm dev                                    # api :4000 + web :3000
 | `pnpm lint` 에서 web 실패 | `apps/web` 에 eslint 설정 파일이 아예 없다. `next lint` 가 대화형 설정을 물어보는 것 — **기존 상태이고 코드 문제가 아니다** |
 | psql 로 조회했는데 0행 | `DATABASE_URL`(ntms_app)로 붙었다. `ADMIN_DATABASE_URL` 을 쓸 것 |
 | 화면이 한산하다 | 데모 트립 시각이 **실행 시점 기준**이다. `seed:demo -- --reset` 을 다시 돌린다 |
+| 로그인이 갑자기 안 된다 | `/auth/login` 은 **IP당 5분에 10회**다(`auth.controller.ts`). API 를 검증하며 curl 로 여러 번 부르면 브라우저 몫까지 쓴다. 한도를 낮추지 말고 API 를 재기동해 카운터를 비운다 |
+| 공통코드 화면이 비었다 | `seed`(demo 아님)를 안 돌렸다. 코드 그룹은 기준정보라 `seed.ts` 에 있다 |
 
 ---
 
@@ -176,8 +213,19 @@ ssh ntms 'cd /opt/ntms && bash docker/deploy.sh'
 ssh ntms 'cd /opt/ntms && set -a && . ./.env && set +a && \
   docker compose -f docker/docker-compose.yml --env-file .env run --rm --no-deps \
   -e ADMIN_DATABASE_URL="postgresql://ntms_admin:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ntms}?schema=ntms" \
-  api node apps/api/dist/scripts/seed.js'      # seed-demo.js 도 같은 방식
+  api node apps/api/dist/scripts/seed.js'
 ```
+
+`seed-demo.js` 도 같은 방식이되 **비밀번호를 반드시 갈아끼운다.** 안 넣으면
+저장소에 적힌 값으로 데모 계정 18개가 생기고, 이 서버는 공인 IP 에 HTTP 다.
+
+```bash
+ssh ntms 'cd /opt/ntms && set -a && . ./.env && set +a &&   docker compose -f docker/docker-compose.yml --env-file .env run --rm --no-deps   -e ADMIN_DATABASE_URL="postgresql://ntms_admin:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ntms}?schema=ntms"   -e DEMO_USER_PASSWORD="$(openssl rand -base64 18)"   api node apps/api/dist/scripts/seed-demo.js -- --reset'
+```
+
+무작위로 넣으면 그 계정으로는 아무도 못 들어온다 — 데모 화면을 채우는 것이
+목적이고 로그인은 `admin` 으로 하기 때문에 그것으로 충분하다. 시드 로그
+끝줄이 `(비밀번호: 환경변수)` 인지 확인할 것.
 
 `docker-compose.yml` 의 api 서비스에 `ADMIN_DATABASE_URL` 을 **넣지 말 것.**
 앱 컨테이너가 BYPASSRLS DSN 을 상시 들고 있으면 침해 시 테넌트 격리가 통째로
@@ -212,7 +260,15 @@ ssh ntms 'cd /opt/ntms && set -a && . ./.env && set +a && \
 | 오더 등록 | 두 창 사이에 소요시간이 들어가는가 |
 | 편성 | 정차 순서를 따라가며 천장을 넘는가 |
 | 운송실행 | 계획선에서 오른쪽으로 얼마나 벗어났는가 |
-| **실적 · 정산** | **아직 안 정했다 — 다음 사람이 정할 것** |
+| 실적 | 계획이 0선에 서고 실제가 좌우로 벌어진다 |
+| 사용자 · 권한 | 되돌릴 수 없는 쪽으로 얼마나 뻗어 있는가 |
+| 공통코드 | 끄면 드롭다운에서 무엇이 사라지나 |
+| 감사로그 | 마흔 칸 중 바뀐 한 칸 |
+| **정산** | **아직 안 정했다 — 다음 사람이 정할 것** |
+
+**축은 방향을 갖는다.** 편차 축은 오른쪽으로 벌어진 만큼이 초과고, 지연 전파
+축은 오른쪽이 늦은 것이고, 권한 격자는 오른쪽이 되돌릴 수 없는 것이다.
+새 축을 세울 때 "오른쪽이 무엇인가" 를 먼저 정하면 나머지가 따라온다.
 
 ### 지켜야 하는 것
 
@@ -255,100 +311,191 @@ ssh ntms 'cd /opt/ntms && set -a && . ./.env && set +a && \
 5. **차종 구성이 물동량을 감당해야 한다.** 트립 무게가 19~21톤이면 실을 수 있는
    차가 25톤 트레일러뿐이다. 5대로는 한 대에 열 건이 쌓인다(→10대로 늘렸다).
 6. `--reset` 시 **FK 역순으로** 지운다. 새 자식 테이블을 만들면 삭제 목록에도
-   추가할 것 — 안 그러면 다음 `--reset` 이 FK 로 죽는다.
+   추가할 것 — 안 그러면 다음 `--reset` 이 FK 로 죽는다. FK 만이 아니라
+   **트리거 순서**도 본다 (`trg_actual_close_guard` — 9절).
+7. **지표가 자기 꼬리를 물지 않는지 본다.** 확정 관문이 인수증 없는 실적을
+   막으므로, 확정분만 세는 인수증 완료율은 정의상 늘 100% 다. 시드를 어떻게
+   바꿔도 안 움직이는 지표는 시드 문제가 아니라 정의 문제다.
+8. **표본이 작으면 비율이 톱니가 된다.** 하루 2~6건에서 정시율은
+   0/33/50/100 만 나온다. 추세선을 쓰는 화면은 하루 물량이 그 추세를 감당할
+   만큼 있어야 한다.
+9. **고정 단가로 만든 금액은 상수 지표를 낳는다.** 매출을 `거리 × 1650`,
+   매입을 `거리 × 1280` 으로 만들면 마진율이 언제나 22.4% 다. 요율표를 태워
+   화주·차종·권역마다 갈리게 해야 그 칸이 정보를 준다.
+10. **기준정보 시드는 덮어쓰지 않는다.** 코드 그룹처럼 운영자가 화면에서
+   고치는 표는, 시드가 다시 돌 때 **없는 것만 넣고 있는 것은 둔다.** 배포가
+   운영자의 수정을 되돌리면 그 화면은 두 번 다시 쓰이지 않는다.
 
 ---
 
-## 9. 마지막 작업 — 운송실행 · 트래킹 (커밋 `f48e015`)
+## 9. 마지막 작업 — 실적 확정 · 시스템관리 (커밋 `492be08` `30d1656`)
 
-### 설계 판단
+### 실적 — 축을 90도 돌렸다
 
-지도는 "차가 어디 있나"에만 답한다. 관제 담당자가 정작 알아야 하는 것은
-**이 지연이 앞으로 어디까지 번지나**다. 그래서 지도를 주인공으로 두지 않고
-가운데 창으로 두고, 오른쪽에 **지연 전파 축**을 세웠다.
+여기까지 모든 화면의 축은 시간이었다. 실적 화면이 열릴 때 그 질문은 이미
+끝나 있다 — 차는 돌아왔고 물건은 내렸다. 남은 질문은 **계획과 실제가 어디서
+갈라졌고 그 차이를 누가 무는가**다.
 
-핵심 계산 (`packages/shared/src/execution.ts` 의 `buildCascade()`):
+그래서 계획이 가운데 0선에 서고 실제가 좌우로 벌어진다
+(`VarianceSpine`). 막대 길이는 줄마다 눈금이 다르다(거리는 %, 대기는 분).
+한 눈금으로 통일하면 읽기는 쉬워지지만 뜻이 틀려지므로, 막대는 **모양**으로
+두고 정확한 값은 오른쪽 숫자에 맡긴다.
 
-```
-지난 정차   실적을 그대로 쓴다
-남은 정차   마지막으로 지난 정차에서 물고 있는 지연을 계획 위에 얹는다
-흡수량 = min(물고 있는 지연, max(0, 도크 여는 시각 − 계획 도착))
-```
+**확정이 경계다.** 확정된 실적은 정산이 물고 가고, 세금계산서가 나가면
+고치는 길은 조정 전표뿐이다. `evaluateConfirmGate()` 가 그 경계이고 화면과
+서버가 같이 부른다. 서버가 한 번 더 부르는 것은 화면을 믿지 않아서가 아니라,
+화면이 판정한 뒤 확정을 누르기까지 사이에 인수증이 취소될 수 있어서다.
 
-계획에 이미 기다림이 들어 있으면 지연이 거기서 흡수된다. 이걸 안 넣으면 화면이
-"정차 다섯 곳 전부 40분 지연"이라고 겁을 주고, 담당자는 곧 화면을 안 믿게 된다.
+관문은 **목록에서도** 보인다. 상세를 열어야 이유를 알면 스무 건을 확정하려고
+스무 번을 연다.
 
-화면이 내는 숫자는 "지금 40분 늦었다"(지난 일)가 아니라 **"앞으로 12분까지
-버팁니다"**(지금 할 일)다 — `headroomMinutes`, 이분탐색으로 구한다.
+한 표를 세 각도로 본다 — 건별이면 실적, 차량별로 접으면 운행일보, 날짜별로
+접으면 KPI. 셋 다 `transport_actual` 을 읽으므로 한 컨트롤러에 있다.
+
+### 시스템관리 — 세 화면, 세 질문
+
+| 화면 | 답하는 질문 | 장치 |
+|---|---|---|
+| 사용자 · 권한 | 이 사람이 어디까지 되돌릴 수 없는 일을 하나 | `buildReachGrid()` |
+| 공통코드 | 이 코드를 끄면 다른 화면에서 무엇이 사라지나 | `buildCodePreview()` |
+| 감사로그 | 이 값이 언제 누가 무엇에서 무엇으로 바뀌었나 | `diffSnapshot()` |
+
+권한 격자의 **가로축 순서가 그림의 전부**다 — 조회 · 등록 · 수정 · 내보내기 ·
+삭제 · 승인. 알파벳순이나 CRUD 순으로 두면 격자가 아무 말도 안 한다.
+안 가진 권한도 윤곽으로 남긴다(비교가 되려면 모두 같은 모양이어야 한다).
+아예 없는 권한은 빈칸이다 — **없는 것과 안 준 것은 다르다.**
+
+세로축은 `permission.module_code` 가 아니라 **권한코드의 앞자리**를 쓴다.
+DB 는 DISPATCH 를 PLAN 에, RATE 를 MASTER 에 접어 두었는데, 화면을 쓰는
+사람은 그것을 다른 일로 안다.
+
+공통코드는 **왼쪽이 편집, 오른쪽이 결과**다. 미리보기는 화면이 자기 식으로
+그리지 않고 실제 드롭다운이 쓰는 함수를 그대로 부른다 — 미리보기가 진짜와
+다르면 그건 미리보기가 아니라 거짓말이다.
+
+감사 상세는 JSON 두 덩이를 나란히 놓지 않는다. 마흔 칸에서 바뀐 한 칸을
+찾는 일을 사람에게 시키면 분쟁이 났을 때 아무도 이 화면을 안 연다.
 
 ### 창구
 
 ```
-GET   /execution/board?date=          관제 보드 (요약 + 카드, 운행 중 먼저 정렬)
-GET   /execution/lookup?q=            오더·트립·차량번호로 찾기 (날짜 안 받음)
-GET   /execution/:id/track            정차 실적 + 지연 축 + GPS 자취 + 도로 경로
-GET   /execution/exceptions?...       예외 목록 (기본 status=OPEN)
-POST  /execution/exceptions           예외 등록
-PATCH /execution/exceptions/:id       상태 전환 — 조치 없이 해결로 못 넘긴다
-GET   /execution/pods?...             인수증 + **미도착 목록**
-PATCH /execution/pods/:id/confirm     확인 / 되돌리기 — 되돌릴 땐 사유 필수
+GET   /actuals?from=&to=&status=&blockedOnly=   목록 + 요약
+POST  /actuals/generate                          실행 → 실적 생성 (from·to 필요)
+POST  /actuals/confirm                           일괄 확정 — 관문에 걸리면 건별 사유
+GET   /actuals/:id                               편차 축 · 관문 · 정차 · 예외 · 이력
+POST  /actuals/:id/hold  /reopen                 보류 · 확정해제 (사유 필수)
+GET   /actuals/daily?date=   /kpi?from=&to=      운행일보 · KPI
+POST  /actuals/rebuild                           집계 다시 찍기
+
+GET   /system/users?…  /users/:id  /roles        계정 · 권한 격자
+PATCH /system/users/:id                          역할은 지우고 다시 넣는다(감사 가독성)
+POST  /system/users/:id/unlock  /deactivate      사유 필수. 막을 땐 세션도 끊는다
+GET   /system/code-groups  /:groupId             그룹 · 코드 · 미리보기
+POST  PATCH DELETE  …/codes…                     잠긴 그룹은 사유별로 다르게 거절
+GET   /system/audit?…  /:id  /trail  /facets     변경 목록 · 바뀐 칸 · 레코드 내력
 ```
 
-### 네이버 지도
+### 이번에 고친 것
 
-- 환경변수는 NCP 콘솔이 주는 이름에 맞췄다:
-  `NAVER_MAP_CLIENT_ID` / `NAVER_MAP_CLIENT_SECRET`
-  (옛 이름 `NAVER_MAPS_CLIENT_ID` / `NAVER_API_KEY_ID` / `NAVER_API_KEY` 는 없앴다)
-- SDK 는 `ncpKeyId=` 파라미터. `naver-map.tsx` 가 모듈 수준 Promise 로 **한 번만**
-  받는다 — 컴포넌트마다 받으면 두 번째가 전역 `naver` 를 덮어써 첫 지도가 죽는다.
-- 도로 경로는 `ExecutionService.routeCache` 로 트립마다 한 번만 받는다. 관제
-  화면은 30초마다 다시 부르므로 캐시가 없으면 화면을 열어 둔 것만으로 요금이
-  계속 나간다.
-- **NCP 콘솔의 "Web 서비스 URL"** 에 접속 도메인이 등록돼 있어야 SDK 가 뜬다.
-  지금은 `http://www.qqq.ai.kr` 과 `http://175.45.193.174` 로 동작 확인했다.
-- 키가 없어도 앱은 뜬다. 지도 자리에만 안내가 뜨고 지연 전파 축은 그대로 돈다.
+- **`@Roles` 를 읽는 가드가 없었다.** 데코레이터만 있고 `RolesGuard` 가
+  없어서, 붙여도 아무 효력이 없는 상태였다. 만들어 등록했고, 조회전용
+  계정으로 시스템 창구 셋 모두 403 을 확인했다. (4절 참고)
+- **`pod_completion_rate` 가 구조적으로 늘 100% 였다.** 확정 관문이 인수증
+  없는 실적을 막으므로 확정분만 세면 정의상 100 이다. 이 한 지표만 분모를
+  그날 전체(미확정 포함)로 돌렸다. 나머지는 "확정된 것만 센다" 를 그대로 둔다.
+- 공통코드가 **0행**이었다 → 10그룹 59코드. 계정이 **2명**뿐이었다 → 20명.
 
-### 이번에 고친 데이터 버그
+### 밟을 뻔한 것
 
-- `execution_stop` · `gps_log` · `transport_exception` · `pod` 가 **0행**이었다
-- `todayDate()` 가 로컬 자정이라 **date 컬럼이 전부 하루 앞당겨** 저장됐다
-- 트립 시각이 상태와 어긋나 '완료' 트립이 밤 11시에 끝났다
-- 25톤 트레일러 5→10대 (한 대에 열 건이 쌓였다)
-- 메뉴 `EXEC_TRACKING` 이 `is_active=false` 로 꺼져 있어 표준 메뉴에 추가
+- `user_type` 은 `PARTNER` 가 아니라 `SHIPPER` / `CARRIER` 다.
+  `user_status` 에는 `PENDING` 도 있다. `login_result` 는 `FAIL` 이 아니라
+  `FAIL_PASSWORD` 처럼 **실패 종류**를 든다. TypeScript 를 `as never` 로
+  달래면 컴파일은 통과하고 **런타임에서 Prisma 가 거절**한다. enum 은
+  `psql -c "select unnest(enum_range(NULL::ntms.타입))"` 로 먼저 볼 것.
+- `useApiMutation` 은 **변수 객체를 통째로 요청 본문으로** 보낸다.
+  `{ codeId, body }` 처럼 한 겹 싸면 서버가 `body` 라는 키를 받아 스키마에
+  걸린다. 평평하게 펴서 보내고 경로에 쓸 id 만 골라 쓴다.
+- `curl` 은 Windows 바이너리라 `-o /tmp/x` 가 `C:\tmp\x` 로 간다.
+  Git Bash 의 `/tmp` 와 다른 곳이다.
+- 로컬 검증 중 **`/auth/login` 의 5분 10회 제한**을 다 써서 브라우저가 429 로
+  튕긴 적이 있다. 한도를 낮추지 말고 API 를 재기동해 카운터를 비운다
+  (메모리 저장이다).
 
 ---
 
-## 10. 다음 사람에게 — 실적 관리 및 확정
+## 10. 다음 사람에게 — 매출/매입 정산
 
-### 쓸 수 있는 테이블
+파이프라인의 마지막 칸이다. 이것을 채우면 오더에서 돈까지가 닫힌다.
 
-| 테이블 | 무엇 |
+### 정산은 실적 위에서만 존재한다
+
+스키마가 그렇게 못 박아 두었다.
+
+```
+settlement_detail.actual_id            → transport_actual   (FK)
+settlement_detail.actual_order_id      → actual_order       (FK)
+transport_actual.billing_settlement_id → settlement         (역참조 FK)
+```
+
+`settlement`(헤더) · `settlement_detail`(명세) · `settlement_charge`(부대비) ·
+`settlement_adjustment`(조정) · `tax_invoice` · `payment_record`(수금·지급) ·
+`settlement_close`(기간 마감) 으로 나뉘어 있고, `settlement_type` 으로
+매출(BILLING)과 매입(PAYMENT)을 가른다. **둘이 같은 구조**라 화면 하나를
+`type` 만 바꿔 두 번 쓸 수 있다.
+
+### 쓸 수 있는 재료 (DB 를 직접 조회해 확인한 것)
+
+| 재료 | 상태 |
 |---|---|
-| `transport_actual` | 실행 한 건의 확정 실적. 계획 대비 거리·시간 차이, 정시 여부, 인수증 여부, 적재율, 공차거리를 이미 칸으로 들고 있다 |
-| `actual_order` | 오더 단위 실적 (인수증과 연결) |
-| `kpi_daily` | 일자별 집계 |
-
-`transport_actual.execution_id` 는 `transport_execution` 과 1:1 (`@unique`).
-즉 **실행이 끝나면 실적 한 행을 만드는** 구조다. 지금은 한 행도 없다.
-
-### 이미 준비된 재료
-
-- 정시 여부: `execution_stop.is_on_time`, `delay_minutes`
-- 인수증 여부: `pod` (미도착 판정은 `ExecutionService.missingPods()` 에 있다)
-- 예외: `transport_exception` — `settlement_impact` · `damage_amount` ·
-  `liability_party` 칸이 이미 있고 시드가 파손 건에 채워 넣는다
-- 계획 대비: `trip.planned_distance_km` vs `transport_execution.actual_distance_km`
+| `rate_table` / `rate_table_detail` | **6 / 64행**, 매출3·매입3, DISTANCE·PER_TRIP·ZONE 모두 APPROVED |
+| `transport_actual` | 확정 실적이 `billing_amount` · `payment_amount` · `margin_amount` 를 이미 칸으로 든다 |
+| `transport_exception` | `settlement_impact` · `damage_amount` · `liability_party` 가 채워져 있다 |
+| `surcharge_type` | **0행** — 시드 필요 (WAITING · EXTRA_STOP · HANDLING · TOLL · ISLAND · NIGHT) |
+| `partner_contract` | **0행** — 시드 필요 |
+| 메뉴 · 권한 · 채번 | `seed.ts` 에 **이미 있다** (`STL_*` 4개, `SETTLEMENT.*` 4권한, `ST` prefix MONTHLY) |
+| 운임 계산 엔진 | **없다.** `rate-detail.ts` 는 요율 *편집* 스키마이지 계산기가 아니다 |
 
 ### 생각해 볼 축
 
-실적 화면이 답해야 하는 질문은 "얼마나 실어 날랐나" 가 아니라 **"계획과 실제가
-어디서 갈라졌고, 그 차이를 누가 문다"** 일 가능성이 높다. 확정(confirm)이 있는
-화면이므로 **되돌릴 수 없는 경계**를 어디에 그을지가 설계의 중심이 된다 —
-확정 뒤에는 정산이 그 숫자를 물고 가기 때문이다.
+정산이 답해야 하는 질문은 "얼마 벌었나" 가 아니라 **"돈이 어디서 멈춰
+있나"** 일 가능성이 높다. `settlement_status` 가 10단계인 것이 곧 관문의
+연속이다.
 
-정산은 `settlement`(헤더) · `settlement_detail`(명세) · `settlement_charge`(부대비) ·
-`settlement_adjustment`(조정) · `settlement_close`(기간 마감) 로 이미 나뉘어 있다.
-`settlement_type` 으로 매출/매입을 가른다.
+가로축을 금액으로, 세로로 관문을 쌓으면 각 단계에서 **줄어든 폭이 그 관문에
+걸린 돈**이 된다 — 실적 확정 → 정산 생성 → 확정·승인 → 계산서 발행 → 수금.
+매출과 매입이 같은 구조이므로 사다리를 위아래로 겹치면 **그 사이 폭이
+마진**이다. 대시보드의 파이프라인과 형제이되 단위가 건수가 아니라 금액이다.
+
+상세는 "이 금액이 **어떻게** 나왔나" 에 답해야 한다. `calculation_detail`
+JSONB 에 산출 근거를 남기게 되어 있는 이유가 그것이다 — 운임표가 개정돼도
+과거 정산을 재현할 수 있어야 한다.
+
+`calculateRate()` 를 `@ntms/shared` 에 두면 시드도 그것을 부를 수 있고,
+그러면 8절 9번(고정 단가가 상수 지표를 낳는 문제)이 같이 풀린다.
+
+### 먼저 밟게 될 지뢰
+
+1. **`trg_actual_close_guard`** (`db/ddl/91_trigger.sql`) — `settlement_close`
+   가 CLOSED 면 그 기간의 `transport_actual` **INSERT/UPDATE 가 42501 로
+   죽는다.** `--reset` 은 `settlement_close` 를 `transport_actual` 보다
+   **먼저** 지워야 한다. 이건 FK 가 아니라 트리거라 삭제 순서 규칙만으로는
+   안 걸린다.
+2. **순환 FK** — `settlement.tax_invoice_id` ↔ `tax_invoice.settlement_id`.
+   지우려면 한쪽을 NULL 로 먼저 푼다.
+3. **`CHECK (total_amount = supply_amount + tax_amount)`** — 반올림으로 1원만
+   어긋나도 INSERT 자체가 죽는다. 합계를 먼저 만들고 역산하지 말 것.
+   `settlement_detail` · `settlement_adjustment` · `tax_invoice` 모두 같다.
+4. **`CHECK (paid_amount <= total_amount + 0.01)`** — 과입금이 안 들어간다.
+5. **월 단위 정산에는 몇 달치 데이터가 필요하다.** `settlement_year_month` 가
+   `CHAR(6)` 이고 마감도 월 단위인데, 지금 시드는 13일치뿐이라 마감할 지난
+   달도 연체 미수도 안 생긴다. `HISTORY_DAYS` 를 늘려야 한다 —
+   그러면 8절 8번(표본이 작아 정시율이 톱니가 되는 문제)도 같이 풀린다.
+
+### 이어서 볼 것
+
+`C:\Users\neosy\.claude\plans\merry-bouncing-blanket.md` 에 정산 구현
+계획이 단계별로 적혀 있다(축 · shared 판정 · 창구 · 화면 · 시드 · 검증).
+로컬 경로라 저장소 밖이지만, 없더라도 이 절만으로 다시 세울 수 있게 적었다.
 
 ---
 

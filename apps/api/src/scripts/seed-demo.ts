@@ -2353,7 +2353,18 @@ async function main(): Promise<void> {
  * 로그인 이력도 같이 만든다. 계정 상세의 "최근 접속" 이 비어 있으면
  * 그 칸이 무엇을 위한 자리인지 알 수 없다.
  */
-const DEMO_USER_PASSWORD = 'Ntms@2026!demo';
+/**
+ * 데모 계정 비밀번호.
+ *
+ * 로컬에서는 고정값이라야 쓸모가 있다 — 계정마다 비밀번호를 찾아 다니면
+ * 화면을 확인하려는 사람이 시간을 다 쓴다. 그런데 그 값이 저장소에 적혀
+ * 있으므로, **공인 IP 에서 도는 서버에 그대로 넣으면 알려진 비밀번호 계정이
+ * 열여덟 개 생긴다.**
+ *
+ * 그래서 환경변수로 갈아끼울 수 있게 열어 둔다. 가동계 시드는 반드시
+ * `DEMO_USER_PASSWORD` 를 넣고 돌린다(docker/README.md).
+ */
+const DEMO_USER_PASSWORD = process.env.DEMO_USER_PASSWORD ?? 'Ntms@2026!demo';
 
 /** seed.ts 와 같은 파라미터. 다르면 같은 비밀번호가 다른 해시가 된다 */
 const ARGON2_OPTIONS = { algorithm: 2, memoryCost: 19_456, timeCost: 2, parallelism: 1 } as const;
@@ -2474,7 +2485,11 @@ async function seedDemoUsers(prisma: PrismaClient, tenantId: bigint): Promise<vo
     created += 1;
   }
 
-  console.log(`데모 계정 ${created}명 · 로그인 이력 ${historyCount}건`);
+  const fromEnv = Boolean(process.env.DEMO_USER_PASSWORD);
+  console.log(
+    `데모 계정 ${created}명 · 로그인 이력 ${historyCount}건` +
+      (fromEnv ? ' (비밀번호: 환경변수)' : ' (비밀번호: 저장소 기본값 — 가동계면 다시 볼 것)'),
+  );
 }
 
 main().catch((error: unknown) => {
