@@ -19,6 +19,10 @@
  */
 import { PrismaClient } from '@ntms/db';
 import type { OrderStatus, TripStatus } from '@ntms/shared';
+// 실적과 집계는 앱이 쓰는 함수를 그대로 부른다. 시드가 자기 계산을 따로
+// 가지면 데모의 숫자와 앱이 만든 숫자가 갈라진다.
+import { EXECUTION_FOR_ACTUAL, buildActualFromExecution } from '../actual/actual-build.js';
+import { rebuildAggregates } from '../actual/actual-aggregate.js';
 
 const TENANT_CODE = 'NTMS';
 
@@ -330,10 +334,32 @@ async function main(): Promise<void> {
     }
     const tenantId = tenant.tenant_id;
 
+    /*
+      실적을 확정한 사람.
+
+      확정 이력이 "확정 · —" 로 비어 있으면 화면이 고장난 것처럼 보인다.
+      시드가 만든 것이라는 표시로 관리자 계정을 쓴다.
+    */
+    const adminUser = await prisma.user_account.findFirst({
+      where: { tenant_id: tenantId, login_id: 'admin' },
+      select: { user_id: true },
+    });
+    const adminUserId = adminUser?.user_id ?? null;
+
     if (reset) {
       console.log('기존 데모 데이터 삭제 중...');
       // FK 역순으로 지운다. order_status_history 는 트리거가 만든 것이라
       // 오더보다 먼저 치워야 한다.
+      /*
+        FK 역순으로 지운다. 실적 계열이 실행 · 인수증을 물고 있으므로
+        그것들보다 먼저 나간다. 새 자식 테이블을 만들면 여기에도 넣을 것 —
+        빠뜨리면 다음 --reset 이 FK 로 죽는다.
+      */
+      await prisma.kpi_daily.deleteMany({ where: { tenant_id: tenantId } });
+      await prisma.driver_work_log.deleteMany({ where: { tenant_id: tenantId } });
+      await prisma.vehicle_operation_daily.deleteMany({ where: { tenant_id: tenantId } });
+      await prisma.actual_order.deleteMany({ where: { tenant_id: tenantId } });
+      await prisma.transport_actual.deleteMany({ where: { tenant_id: tenantId } });
       await prisma.pod.deleteMany({ where: { tenant_id: tenantId } });
       await prisma.transport_exception.deleteMany({ where: { tenant_id: tenantId } });
       await prisma.gps_log.deleteMany({ where: { tenant_id: tenantId } });
@@ -967,6 +993,8 @@ async function main(): Promise<void> {
 
     /** 차량별 마지막 운행 종료 시각. 다음 배차를 언제부터 붙일 수 있는지 본다 */
     const lastEndByVehicle = new Map<string, number>();
+    /** 차량별 계기판. 운행마다 이어져야 운행일보의 총 주행이 말이 된다 */
+    const odometerByVehicle = new Map<string, number>();
     /** 일부러 만들 겹침의 상대. 배차가 생긴 첫 트립을 붙잡아 둔다 */
     let conflictAnchor: { id: bigint; end: number } | null = null;
 
@@ -1339,6 +1367,19 @@ async function main(): Promise<void> {
               ? Math.max(1, Math.min(totalStops - 1, Math.floor((totalStops * progress) / 100)))
               : totalStops;
 
+            /*
+              계기판은 차마다 이어진다.
+
+              한 대가 하루에 두 번 뛰면 두 번째 운행의 시작 계기판은 첫 번째의
+              끝이어야 한다. 매번 난수로 찍으면 운행일보의 '총 주행'(끝−시작)이
+              음수가 되거나 수만 km 가 된다.
+            */
+            const vkey = vehicle.toString();
+            const startOdo =
+              odometerByVehicle.get(vkey) ?? intBetween(40_000, 480_000);
+            // 회송 — 직전 하차지에서 이번 상차지까지 빈 차로 간 거리
+            const emptyKm = intBetween(6, 68);
+
             const execution = await prisma.transport_execution.create({
               data: {
                 tenant_id: tenantId,
@@ -1350,10 +1391,27 @@ async function main(): Promise<void> {
                 driver_id: vinfo.driverId,
                 actual_start_at: addMinutes(startAt, intBetween(-10, 25)),
                 actual_end_at: running ? null : addMinutes(endAt, intBetween(-20, 40)),
-                start_odometer: intBetween(40_000, 480_000),
+                start_odometer: startOdo,
+                /*
+                  계기판을 닫는다.
+
+                  공차거리는 **계기판 차이에서 실차 노선 거리를 뺀 나머지**로
+                  구한다(실적 생성 참고). 끝 계기판이 없으면 공차가 통째로
+                  '모름' 이 되고, 운행일보의 공차율 칸이 전부 빈다.
+                  회송(다음 상차지까지 빈 차로 가는 거리)을 여기에 얹는다.
+                */
+                end_odometer: running ? null : startOdo + lane.km + emptyKm,
                 actual_distance_km: running
                   ? Number(((lane.km * progress) / 100).toFixed(1))
                   : lane.km,
+                actual_duration_min: running ? null : lane.min + 90,
+                // 주행 · 휴게를 나눠 둬야 운행일보의 하루 띠가 칸으로 갈린다
+                driving_minutes: running ? null : lane.min,
+                rest_minutes: running ? 0 : lane.min > 240 ? intBetween(30, 60) : 0,
+                fuel_consumed_liter: running
+                  ? null
+                  : Number(((lane.km + emptyKm) / between(3.2, 4.6)).toFixed(1)),
+                toll_fee: running ? null : lane.toll,
                 status: running ? pick(['IN_TRANSIT', 'IN_TRANSIT', 'ARRIVED'] as const) : 'COMPLETED',
                 current_stop_seq: running ? Math.min(doneStops + 1, totalStops) : totalStops,
                 completed_stop_count: doneStops,
@@ -1373,6 +1431,7 @@ async function main(): Promise<void> {
               },
             });
             executionCount += 1;
+            odometerByVehicle.set(vkey, startOdo + lane.km + emptyKm);
 
             /*
               정차 실적.
@@ -1602,13 +1661,572 @@ async function main(): Promise<void> {
       }
     }
 
+    // -----------------------------------------------------------------
+    // 지난 2주 — 실적 · 운행일보 · KPI 가 볼 것
+    //
+    // 여기까지 만든 것은 전부 **오늘** 이다. 관제와 배차판은 오늘만 있으면
+    // 되지만, 실적 계열 화면은 그렇지 않다.
+    //
+    //   · KPI 는 점 하나가 아니라 **선**이다. 정시율 94% 는 지난주가 97%
+    //     였는지 88% 였는지를 알아야 좋은 숫자인지 판단이 된다. 하루치만
+    //     있으면 스파크라인이 점 하나로 그려지고, 그 화면의 요점이 통째로
+    //     사라진다.
+    //   · 운행일보는 대개 **어제** 것을 여는 화면이다. 오늘 것만 있으면 아직
+    //     도로 위인 차들 때문에 가동시간이 전부 반쯤 잘려 있다.
+    //   · 확정 관문은 **막힌 건**이 있어야 볼 수 있다. 인수증이 다 들어온
+    //     데이터로는 그 화면이 늘 초록불이다.
+    //
+    // 그래서 지난 13일치 완료 운송을 따로 만든다. 오늘 것은 일부러 실적을
+    // 만들지 않는다 — 사용자가 「실적 만들기」를 눌러 프로세스를 한 번
+    // 밟아 볼 자리를 남겨 두는 것이다.
+    // -----------------------------------------------------------------
+    const HISTORY_DAYS = 13;
+
+    /**
+     * 나쁜 주와 회복하는 주.
+     *
+     * 지연을 고르게 흩으면 KPI 선이 평평해지고, 평평한 선은 있으나 마나다.
+     * 실제 운영에도 사고가 겹치는 주가 있고 회복하는 주가 있으므로, 기간
+     * 가운데(8일 전)를 골짜기로 두고 앞뒤로 회복시킨다. 화면을 열면 "여기서
+     * 무슨 일이 있었나" 를 묻게 되는 모양이다.
+     */
+    const slump = (daysAgo: number) => Math.max(0, 1 - Math.abs(daysAgo - 8) / 4);
+
+    /** 그날의 트립 수. 주말은 절반쯤으로 줄인다 — 물동량에도 요일이 있다 */
+    const tripsOn = (day: Date) => {
+      const dow = day.getDay();
+      return dow === 0 ? 2 : dow === 6 ? 3 : 5 + (day.getDate() % 2);
+    };
+
+    const historyDays: Date[] = [];
+    for (let d = HISTORY_DAYS; d >= 1; d -= 1) historyDays.push(addDays(new Date(), -d));
+
+    const historyTripCount = historyDays.reduce((a, day) => a + tripsOn(day), 0);
+    /*
+      채번은 한 번에 받아 둔다.
+
+      건마다 fn_next_no 를 부르면 왕복이 그만큼 늘고, 시드가 느려지면 아무도
+      --reset 을 다시 돌리지 않는다. 안 돌리면 화면이 낡은 데이터로 남는다.
+    */
+    const historyOrderNos = await prisma.$queryRaw<Array<{ no: string }>>`
+      SELECT ntms.fn_next_no(${tenantId}::BIGINT, 'ORDER'::VARCHAR) AS no
+        FROM generate_series(1, ${historyTripCount * 2}::INT)
+    `;
+    const historyTripNos = await prisma.$queryRaw<Array<{ no: string }>>`
+      SELECT ntms.fn_next_no(${tenantId}::BIGINT, 'TRIP'::VARCHAR) AS no
+        FROM generate_series(1, ${historyTripCount}::INT)
+    `;
+    const historyDispatchNos = await prisma.$queryRaw<Array<{ no: string }>>`
+      SELECT ntms.fn_next_no(${tenantId}::BIGINT, 'DISPATCH'::VARCHAR) AS no
+        FROM generate_series(1, ${historyTripCount}::INT)
+    `;
+
+    let hTrip = 0;
+    let hOrder = 0;
+    let hPod = 0;
+    let actualCount = 0;
+    let confirmedCount = 0;
+    let blockedCount = 0;
+
+    for (const day of historyDays) {
+      const daysAgo = Math.round((Date.now() - day.getTime()) / 86_400_000);
+      const bad = slump(daysAgo);
+
+      for (let t = 0; t < tripsOn(day); t += 1) {
+        const seq = hTrip;
+        const lane = LANES[seq % LANES.length]!;
+        const from = locInfo.get(lane.from)!;
+        const to = locInfo.get(lane.to)!;
+
+        // 출발은 06~13시. 트립마다 흩어야 운행일보의 하루 띠가 서로 겹치지 않는다.
+        const startAt = new Date(day);
+        startAt.setHours(6 + ((seq * 3) % 8), (seq * 17) % 60, 0, 0);
+        const endAt = addMinutes(startAt, lane.min + 90);
+
+        /*
+          지연은 그날의 상태를 따른다.
+
+          나쁜 주에는 절반 넘게 늦고 그 폭도 크다. 확률로만 뽑으면 고정 시드
+          에서 어떤 날이 통째로 정시가 되어 선이 평평해지므로, 나머지 연산으로
+          확정적으로 흩는다.
+        */
+        const late = seq % 10 < Math.round(2.5 + bad * 5);
+        const delayMin = late ? intBetween(12, 40) + Math.round(bad * 60) : 0;
+
+        const orderCount = seq % 3 === 0 ? 2 : 1;
+        const members: Array<{ id: bigint; weight: number; volume: number }> = [];
+        for (let m = 0; m < orderCount; m += 1) {
+          const shipper = SHIPPERS[(seq + m) % SHIPPERS.length]!;
+          const weight = Math.round(between(1200, 8600));
+          const volume = Number((weight / between(180, 320)).toFixed(3));
+          const qty = intBetween(20, 480);
+          const dayMidnight = dateOnly(day);
+
+          const row = await prisma.transport_order.create({
+            data: {
+              tenant_id: tenantId,
+              order_no: historyOrderNos[hOrder]!.no,
+              order_type: 'DELIVERY',
+              order_date: dayMidnight,
+              shipper_id: partnerId.get(shipper.code)!,
+              consignee_id: partnerId.get(CONSIGNEES[(seq + m) % CONSIGNEES.length]!.code)!,
+              from_location_id: from.id,
+              from_location_name: from.name,
+              from_address1: from.addr,
+              from_latitude: from.lat,
+              from_longitude: from.lng,
+              from_zone_id: from.zone,
+              to_location_id: to.id,
+              to_location_name: to.name,
+              to_address1: to.addr,
+              to_latitude: to.lat,
+              to_longitude: to.lng,
+              to_zone_id: to.zone,
+              appointment_type: 'WINDOW',
+              pickup_date: dayMidnight,
+              delivery_date: dayMidnight,
+              total_item_count: 1,
+              total_qty: qty,
+              total_weight_kg: weight,
+              total_volume_cbm: volume,
+              total_pallet_qty: Math.max(1, Math.round(volume / 1.6)),
+              temperature_zone: 'AMBIENT',
+              distance_km: lane.km,
+              estimated_amount: Math.round((lane.km * between(1150, 1850)) / 1000) * 1000,
+              freight_terms: 'CREDIT',
+              priority: 'NORMAL',
+              /*
+                지난 건은 인수확인까지 끝나 있다. 정산완료(SETTLED)로 두지
+                않는 이유는 정산 단계가 아직 없어서다 — 있지도 않은 단계를
+                가리키면 오더 이력이 거짓말이 된다.
+              */
+              status: 'CONFIRMED_POD',
+            },
+          });
+          await prisma.transport_order_item.create({
+            data: {
+              tenant_id: tenantId,
+              order_id: row.order_id,
+              line_no: 1,
+              item_name: ITEM_NAMES[(seq + m) % ITEM_NAMES.length]!,
+              qty,
+              uom_code: 'BOX',
+              weight_kg: weight,
+              volume_cbm: volume,
+              temperature_zone: 'AMBIENT',
+            },
+          });
+          members.push({ id: row.order_id, weight, volume });
+          hOrder += 1;
+        }
+
+        const totalWeight = members.reduce((a, o) => a + o.weight, 0);
+        const totalVolume = members.reduce((a, o) => a + o.volume, 0);
+        // 실을 수 있는 차만 고른다. 아무 차나 붙이면 적재율이 300% 로 찍힌다.
+        const capable = vehicleIds.filter((id) => {
+          const info = vehicleInfo.get(id)!;
+          const type = VEHICLE_TYPES.find((v) => vtypeId.get(v.code) === info.typeId)!;
+          return type.weight >= totalWeight;
+        });
+        const fitting = capable.length > 0 ? capable : vehicleIds;
+        const vehicle = fitting[seq % fitting.length]!;
+        const vinfo = vehicleInfo.get(vehicle)!;
+        const vt = VEHICLE_TYPES.find((v) => vtypeId.get(v.code) === vinfo.typeId)!;
+
+        const trip = await prisma.trip.create({
+          data: {
+            tenant_id: tenantId,
+            trip_no: historyTripNos[hTrip]!.no,
+            plan_date: dateOnly(startAt),
+            trip_type: members.length > 1 ? 'CONSOLIDATED' : 'SINGLE',
+            transport_mode: 'ROAD',
+            required_vehicle_type_id: vinfo.typeId,
+            required_ton: vt.ton,
+            temperature_zone: 'AMBIENT',
+            start_location_id: from.id,
+            end_location_id: to.id,
+            start_zone_id: from.zone,
+            end_zone_id: to.zone,
+            total_stop_count: 2,
+            pickup_stop_count: 1,
+            delivery_stop_count: 1,
+            total_order_count: members.length,
+            total_weight_kg: totalWeight,
+            total_volume_cbm: Number(totalVolume.toFixed(3)),
+            total_pallet_qty: Math.max(1, Math.round(totalVolume / 1.6)),
+            weight_loading_rate: Number(Math.min((totalWeight / vt.weight) * 100, 100).toFixed(2)),
+            volume_loading_rate: Number(Math.min((totalVolume / vt.cbm) * 100, 100).toFixed(2)),
+            planned_distance_km: lane.km,
+            planned_duration_min: lane.min,
+            planned_start_at: startAt,
+            planned_end_at: endAt,
+            planned_toll_fee: lane.toll,
+            estimated_billing_amount: Math.round((lane.km * 1650) / 1000) * 1000,
+            estimated_payment_amount: Math.round((lane.km * 1280) / 1000) * 1000,
+            estimated_margin: Math.round((lane.km * 370) / 1000) * 1000,
+            status: 'CLOSED',
+            confirmed_at: addMinutes(startAt, -240),
+          },
+        });
+
+        for (const [i, m] of members.entries()) {
+          await prisma.trip_order.create({
+            data: {
+              tenant_id: tenantId,
+              trip_id: trip.trip_id,
+              order_id: m.id,
+              seq_no: i + 1,
+              assigned_weight_kg: m.weight,
+              assigned_volume_cbm: m.volume,
+              allocation_basis: 'WEIGHT',
+            },
+          });
+        }
+
+        const tripStops = [];
+        for (const [i, stop] of [
+          { type: 'PICKUP' as const, loc: from, at: startAt },
+          { type: 'DELIVERY' as const, loc: to, at: addMinutes(startAt, lane.min) },
+        ].entries()) {
+          tripStops.push(
+            await prisma.trip_stop.create({
+              data: {
+                tenant_id: tenantId,
+                trip_id: trip.trip_id,
+                stop_seq: i + 1,
+                stop_type: stop.type,
+                location_id: stop.loc.id,
+                location_name: stop.loc.name,
+                address1: stop.loc.addr,
+                latitude: stop.loc.lat,
+                longitude: stop.loc.lng,
+                planned_arrival_at: stop.at,
+                planned_departure_at: addMinutes(stop.at, 45),
+                planned_service_min: 45,
+                time_window_from: addMinutes(stop.at, stop.type === 'PICKUP' ? -60 : -30),
+                time_window_to: addMinutes(
+                  stop.at,
+                  stop.type === 'PICKUP'
+                    ? 180
+                    : seq % 3 === 0
+                      ? intBetween(25, 75)
+                      : intBetween(150, 330),
+                ),
+                distance_from_prev_km: i === 0 ? 0 : lane.km,
+                duration_from_prev_min: i === 0 ? 0 : lane.min,
+                status: 'COMPLETED',
+              },
+            }),
+          );
+        }
+
+        await prisma.allocation.create({
+          data: {
+            tenant_id: tenantId,
+            trip_id: trip.trip_id,
+            allocation_seq: 1,
+            carrier_id: vinfo.carrierId,
+            allocation_type: 'DIRECT',
+            allocated_amount: Math.round((lane.km * 1280) / 1000) * 1000,
+            total_amount: Math.round((lane.km * 1280) / 1000) * 1000,
+            currency_code: 'KRW',
+            status: 'ACCEPTED',
+            requested_at: addMinutes(startAt, -240),
+            respond_deadline_at: addMinutes(startAt, -150),
+            responded_at: addMinutes(startAt, -220),
+          },
+        });
+
+        const dispatch = await prisma.dispatch.create({
+          data: {
+            tenant_id: tenantId,
+            dispatch_no: historyDispatchNos[hTrip]!.no,
+            trip_id: trip.trip_id,
+            dispatch_date: dateOnly(startAt),
+            dispatch_type: 'CONSIGNED',
+            carrier_id: vinfo.carrierId,
+            carrier_name: partnerName.get(vinfo.carrierId)!,
+            vehicle_id: vehicle,
+            vehicle_no: vinfo.no,
+            vehicle_type_id: vinfo.typeId,
+            vehicle_type_name: vinfo.typeName,
+            driver_id: vinfo.driverId,
+            driver_name: DRIVER_NAMES[driverIds.indexOf(vinfo.driverId)] ?? '기사',
+            driver_mobile: `010-${String(intBetween(2000, 9999))}-${String(intBetween(1000, 9999))}`,
+            planned_start_at: startAt,
+            planned_end_at: endAt,
+            status: 'COMPLETED',
+            dispatched_at: addMinutes(startAt, -120),
+            notified_at: addMinutes(startAt, -118),
+            accepted_at: addMinutes(startAt, -95),
+            dispatch_amount: Math.round((lane.km * 1280) / 1000) * 1000,
+          },
+        });
+
+        const vkey = vehicle.toString();
+        const startOdo = odometerByVehicle.get(vkey) ?? intBetween(40_000, 480_000);
+        /*
+          회송 거리. 나쁜 주에는 배차가 꼬여 빈 차로 더 달린다.
+
+          공차율이 정시율과 같은 방향으로 움직여야 KPI 에서 두 선을 겹쳐 볼
+          뜻이 생긴다 — 관계없는 잡음 두 개를 나란히 두면 아무것도 안 읽힌다.
+        */
+        const emptyKm = intBetween(6, 48) + Math.round(bad * 30);
+
+        const execution = await prisma.transport_execution.create({
+          data: {
+            tenant_id: tenantId,
+            dispatch_id: dispatch.dispatch_id,
+            trip_id: trip.trip_id,
+            execution_date: dateOnly(startAt),
+            carrier_id: vinfo.carrierId,
+            vehicle_id: vehicle,
+            driver_id: vinfo.driverId,
+            actual_start_at: addMinutes(startAt, intBetween(-10, 15)),
+            actual_end_at: addMinutes(endAt, delayMin),
+            start_odometer: startOdo,
+            end_odometer: startOdo + lane.km + emptyKm,
+            actual_distance_km: lane.km,
+            actual_duration_min: lane.min + 90 + delayMin,
+            driving_minutes: lane.min,
+            rest_minutes: lane.min > 240 ? intBetween(30, 60) : 0,
+            fuel_consumed_liter: Number(((lane.km + emptyKm) / between(3.2, 4.6)).toFixed(1)),
+            toll_fee: lane.toll,
+            status: 'COMPLETED',
+            current_stop_seq: 2,
+            completed_stop_count: 2,
+            total_stop_count: 2,
+            progress_rate: 100,
+            last_latitude: to.lat,
+            last_longitude: to.lng,
+            last_location_at: addMinutes(endAt, delayMin),
+            last_speed_kmh: 0,
+            delay_minutes: delayMin,
+            is_delayed: delayMin > 0,
+            completed_at: addMinutes(endAt, delayMin + 10),
+          },
+        });
+        odometerByVehicle.set(vkey, startOdo + lane.km + emptyKm);
+
+        for (const [si, ts] of tripStops.entries()) {
+          const plannedArr = ts.planned_arrival_at!;
+          const plannedDep = ts.planned_departure_at!;
+          // 지연은 상차에서 생겨 하차로 밀린다. 실제로도 그렇게 움직인다.
+          const stopDelay = si === 0 ? Math.round(delayMin / 2) : delayMin;
+          // 계획(45분)을 넘긴 작업시간이 곧 대기다 — 대기료의 근거가 된다
+          const serviceMin = 45 + (late && si === 0 ? intBetween(10, 50) : intBetween(-8, 12));
+
+          await prisma.execution_stop.create({
+            data: {
+              tenant_id: tenantId,
+              execution_id: execution.execution_id,
+              trip_stop_id: ts.trip_stop_id,
+              stop_seq: ts.stop_seq,
+              stop_type: ts.stop_type,
+              location_id: ts.location_id,
+              location_name: ts.location_name,
+              planned_arrival_at: plannedArr,
+              planned_departure_at: plannedDep,
+              actual_arrival_at: addMinutes(plannedArr, stopDelay),
+              actual_departure_at: addMinutes(plannedDep, stopDelay),
+              service_start_at: addMinutes(plannedArr, stopDelay),
+              service_end_at: addMinutes(plannedDep, stopDelay),
+              actual_service_min: serviceMin,
+              delay_minutes: stopDelay,
+              is_on_time: stopDelay <= 10,
+              arrival_latitude: si === 0 ? from.lat : to.lat,
+              arrival_longitude: si === 0 ? from.lng : to.lng,
+              is_geofence_verified: true,
+              actual_unload_weight_kg: ts.stop_type === 'DELIVERY' ? totalWeight : 0,
+              status: 'COMPLETED',
+            },
+          });
+        }
+
+        /*
+          확정 관문을 볼 수 있게 두 가지를 일부러 남긴다.
+
+            · 인수증이 아직 안 들어온 건 (최근 이틀)
+            · 손해액이 걸린 미해결 예외 (최근 나흘)
+
+          둘 다 확정을 **막는** 조건이라, 이 건들은 목록에서 체크박스가 잠긴다.
+          데이터가 전부 깨끗하면 그 화면이 무엇을 위한 것인지 알 수 없다.
+        */
+        const podMissing = daysAgo <= 2 && seq % 6 === 1;
+        const damaged = daysAgo <= 4 && seq % 9 === 2;
+
+        if (delayMin >= 30) {
+          const kind = EXCEPTION_KINDS[seq % EXCEPTION_KINDS.length]!;
+          await prisma.transport_exception.create({
+            data: {
+              tenant_id: tenantId,
+              exception_no: `EX${dateOnly(startAt).toISOString().slice(0, 10).replace(/-/g, '')}H${String(seq).padStart(4, '0')}`,
+              execution_id: execution.execution_id,
+              dispatch_id: dispatch.dispatch_id,
+              vehicle_id: vehicle,
+              driver_id: vinfo.driverId,
+              carrier_id: vinfo.carrierId,
+              exception_type: kind.type,
+              severity: delayMin >= 75 ? 'HIGH' : delayMin >= 40 ? 'MEDIUM' : 'LOW',
+              occurred_at: addMinutes(startAt, 60),
+              latitude: from.lat,
+              longitude: from.lng,
+              description: kind.description,
+              action_taken: kind.action,
+              impact_minutes: delayMin,
+              // 지난 건의 지연 예외는 이미 닫혀 있다. 열어 두면 예외 화면의
+              // '미해결' 목록이 2주치로 불어나 오늘 손댈 건이 묻힌다.
+              status: 'CLOSED',
+              reported_at: addMinutes(startAt, 70),
+              resolved_at: addMinutes(endAt, 30),
+              closed_at: addMinutes(endAt, 120),
+            },
+          });
+        }
+
+        if (damaged) {
+          await prisma.transport_exception.create({
+            data: {
+              tenant_id: tenantId,
+              exception_no: `EX${dateOnly(startAt).toISOString().slice(0, 10).replace(/-/g, '')}D${String(seq).padStart(4, '0')}`,
+              execution_id: execution.execution_id,
+              dispatch_id: dispatch.dispatch_id,
+              vehicle_id: vehicle,
+              driver_id: vinfo.driverId,
+              carrier_id: vinfo.carrierId,
+              exception_type: 'CARGO_DAMAGE',
+              severity: 'HIGH',
+              occurred_at: addMinutes(endAt, -20),
+              latitude: to.lat,
+              longitude: to.lng,
+              description: '하차 중 파렛트 전도, 외박스 8박스 파손',
+              action_taken: '사진 촬영 후 수하처 확인서 수령',
+              impact_minutes: intBetween(20, 60),
+              damage_amount: intBetween(3, 12) * 100_000,
+              liability_party: 'CARRIER',
+              /*
+                귀책은 적혀 있어도 아직 못 닫았다. 이 한 건이 실적 확정을
+                막는다 — 누가 무는지 최종 확인이 나야 금액이 갈리기 때문이다.
+              */
+              settlement_impact: true,
+              status: 'INVESTIGATING',
+              reported_at: addMinutes(endAt, -10),
+            },
+          });
+        }
+
+        for (const [oi, m] of members.entries()) {
+          if (podMissing && oi === 0) continue;
+          hPod += 1;
+          const flaw = seq % 11 === 4 && oi === 0 ? POD_FLAWS[seq % POD_FLAWS.length]! : null;
+          const deliveredAt = addMinutes(endAt, delayMin - intBetween(0, 15));
+          // 지난 건의 인수증은 대개 확인까지 끝나 있다. 최근 이틀만 남긴다 —
+          // '인수증 확인' 관문이 짚는 대상이 그것이다.
+          const confirmed = daysAgo > 2 || seq % 4 !== 0;
+
+          await prisma.pod.create({
+            data: {
+              tenant_id: tenantId,
+              execution_id: execution.execution_id,
+              order_id: m.id,
+              pod_no: `PD${dateOnly(startAt).toISOString().slice(0, 10).replace(/-/g, '')}H${String(hPod).padStart(4, '0')}`,
+              pod_type: seq % 2 === 0 ? 'SIGNATURE' : 'PHOTO',
+              receiver_name: ['김주임', '박과장', '이대리', '최반장'][seq % 4]!,
+              receiver_relation: '담당자',
+              delivered_at: deliveredAt,
+              pod_result: flaw?.result ?? 'NORMAL',
+              delivered_qty: m.weight,
+              shortage_qty: flaw?.result === 'SHORTAGE' ? Math.round(m.weight * 0.05) : 0,
+              damaged_qty: flaw?.result === 'DAMAGED' ? Math.round(m.weight * 0.03) : 0,
+              abnormal_reason: flaw?.reason ?? null,
+              latitude: to.lat,
+              longitude: to.lng,
+              is_geofence_verified: true,
+              is_confirmed: confirmed,
+              confirmed_at: confirmed ? addMinutes(deliveredAt, intBetween(30, 300)) : null,
+            },
+          });
+        }
+
+        /*
+          실적은 **앱과 같은 함수**로 만든다.
+
+          시드가 실적을 직접 INSERT 하면 앱이 만드는 실적과 계산이 갈라지고,
+          데모에서 멀쩡하던 화면이 실제 운영에서 틀린다. 그 차이는 정산까지
+          가서야 드러나므로 가장 비싼 종류의 어긋남이다.
+        */
+        const forActual = await prisma.transport_execution.findUniqueOrThrow({
+          where: { execution_id: execution.execution_id },
+          include: EXECUTION_FOR_ACTUAL,
+        });
+        const built = await buildActualFromExecution(
+          prisma,
+          { tenantId, userId: adminUserId },
+          forActual,
+        );
+        actualCount += 1;
+
+        /*
+          확정 상태는 나이를 따른다.
+
+          오래된 것은 이미 닫혔고, 어제 것은 아직 손이 남아 있다. 전부 확정으로
+          두면 검수 화면에 할 일이 하나도 없고, 전부 미확정으로 두면 KPI 가
+          텅 빈다 — KPI 는 확정된 실적만 세기 때문이다.
+        */
+        const blocked = podMissing || damaged;
+        const confirmStatus = blocked
+          ? 'DRAFT'
+          : daysAgo <= 1
+            ? seq % 3 === 0
+              ? 'DRAFT'
+              : 'CONFIRMED'
+            : daysAgo === 2 && seq % 7 === 3
+              ? 'REOPENED'
+              : 'CONFIRMED';
+
+        if (blocked) blockedCount += 1;
+        if (confirmStatus === 'CONFIRMED') confirmedCount += 1;
+
+        if (confirmStatus !== 'DRAFT') {
+          await prisma.transport_actual.update({
+            where: { actual_id: built.actualId },
+            data: {
+              confirm_status: confirmStatus,
+              confirmed_at: addMinutes(endAt, 180),
+              confirmed_by: adminUserId,
+              reopened_at: confirmStatus === 'REOPENED' ? addMinutes(endAt, 600) : null,
+              reopen_reason:
+                confirmStatus === 'REOPENED' ? '화주가 대기료 산정 근거를 다시 요청' : null,
+            },
+          });
+        }
+
+        hTrip += 1;
+      }
+    }
+
+    console.log(`지난 ${HISTORY_DAYS}일 — 트립 ${hTrip}건 · 오더 ${hOrder}건 · 인수증 ${hPod}건`);
+    console.log(`실적 ${actualCount}건 (확정 ${confirmedCount} · 확정 막힘 ${blockedCount})`);
+
+    // -----------------------------------------------------------------
+    // 집계 — 운행일보 · 기사 근무 · KPI
+    //
+    // 앱이 실적을 확정할 때 도는 것과 **같은 함수**를 부른다. 시드가 자기 몫의
+    // 집계를 따로 계산하면 화면에 뜬 숫자와 「다시 집계」를 누른 뒤의 숫자가
+    // 달라진다. 그건 지표를 통째로 못 믿게 만드는 종류의 어긋남이다.
+    // -----------------------------------------------------------------
+    for (const day of [...historyDays, new Date()]) {
+      await rebuildAggregates(prisma, { tenantId, userId: adminUserId }, dateOnly(day));
+    }
+    console.log(`집계 ${historyDays.length + 1}일치 — 운행일보 · 기사 근무 · KPI`);
+
     console.log(
       `편성 ${tripIndex}건 · 배정 ${allocationCount}건 · 배차 ${dispatchCount}건 · 운송실행 ${executionCount}건`,
     );
     console.log(
       `정차실적 ${stopActualCount}건 · GPS ${gpsCount}점 · 예외 ${exceptionCount}건 · 인수증 ${podCount}건`,
     );
-    console.log('\n완료. 관제 현황에서 확인하세요.');
+    console.log('\n완료. 관제 현황과 실적 관리에서 확인하세요.');
   } finally {
     await prisma.$disconnect();
   }

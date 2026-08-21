@@ -11,6 +11,7 @@ import { MasterModule } from './master/master.module.js';
 import { OrderModule } from './order/order.module.js';
 import { PlanModule } from './plan/plan.module.js';
 import { ExecutionModule } from './execution/execution.module.js';
+import { ActualModule } from './actual/actual.module.js';
 import { NaverModule } from './naver/naver.module.js';
 import { AllExceptionsFilter } from './common/all-exceptions.filter.js';
 
@@ -36,8 +37,9 @@ import { AllExceptionsFilter } from './common/all-exceptions.filter.js';
     OrderModule,
     PlanModule,
     ExecutionModule,
+    ActualModule,
     NaverModule,
-    // 남은 도메인 모듈: ActualModule, SettlementModule
+    // 남은 도메인 모듈: SettlementModule
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

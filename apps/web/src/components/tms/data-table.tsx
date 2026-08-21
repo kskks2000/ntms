@@ -21,7 +21,12 @@ import { Skeleton } from './panels';
  */
 export interface Column<T> {
   key: string;
-  header: string;
+  /**
+   * 머리글. 대개 글자지만, 전체 선택 체크박스처럼 요소가 오기도 한다.
+   * 화면 밖 caption 과 aria-sort 가 표의 뜻을 따로 지고 있으므로 여기에
+   * 요소가 와도 접근성이 무너지지 않는다.
+   */
+  header: ReactNode;
   align?: 'left' | 'right' | 'center';
   /** 표 폭을 고정할 때. 미지정이면 내용에 맡긴다 */
   width?: string;
