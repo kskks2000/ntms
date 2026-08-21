@@ -196,6 +196,9 @@ pnpm dev                                    # api :4000 + web :3000
 
 ## 6. 가동계
 
+**마지막 배포: 2026-08-21 커밋 `6589281`** (실적 · 시스템관리 포함, 시드 적재 완료).
+지금 무엇이 올라가 있는지는 `ssh ntms 'cd /opt/ntms && git log --oneline -1'` 로 본다.
+
 - VM `175.45.193.174` · 도메인 `www.qqq.ai.kr` (apex `qqq.ai.kr` 도 여기)
 - nginx :80 만. HTTPS 없음 → `COOKIE_SECURE=false` (임시. API 기동 시 경고 로그)
 - 로그인 `NTMS` / `admin` / `Ntms#Prod2026!`
