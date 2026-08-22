@@ -210,7 +210,19 @@ pnpm dev                                    # api :4000 + web :3000
 `seed.js` 로 부대비 유형과 테넌트 사업자등록번호를 채운 뒤 `seed-demo.js --reset`).
 지금 무엇이 올라가 있는지는 `ssh ntms 'cd /opt/ntms && git log --oneline -1'` 로 본다.
 
-- VM `175.45.193.174` · 도메인 `www.qqq.ai.kr` (apex `qqq.ai.kr` 도 여기)
+- VM `175.45.193.174` · **정규 주소는 `http://www.qqq.ai.kr`**
+  - apex `qqq.ai.kr` 은 nginx 가 www 로 301 한다. 공인 IP 는 catch-all 로 그대로
+    열려 있다 — `deploy.sh` 의 배포 검증이 IP 로 들어오기 때문이다.
+  - `PUBLIC_ORIGIN` 이 정규 주소를 들고, 여기서 `CORS_ORIGIN`(api)과
+    `NEXT_PUBLIC_API_URL`(web 빌드 인자)이 파생된다. **바꾸면 재빌드가 필요하다** —
+    `NEXT_PUBLIC_*` 는 빌드 시점에 박힌다. `deploy.sh` 는 `up -d --build` 라 같이 된다.
+  - 다만 브라우저가 실제로 부르는 주소는 `apps/web/src/lib/api-client.ts` 의
+    `const BASE = '/api'` — **상대경로**다. 그래서 어느 이름으로 들어와도 같은
+    출처의 `/api` 를 부르고, CORS 와 쿠키 도메인 문제가 애초에 안 생긴다.
+    `PUBLIC_ORIGIN` 이 틀려도 화면은 멀쩡히 도는 이유가 이것이다 — 값이 맞는지는
+    화면으로 확인할 수 없으니 `.env` 를 직접 볼 것.
+  - 리프레시 쿠키에 `domain` 속성이 없다(host-only). 이름이 여럿이면 이름마다
+    세션이 따로 생긴다 — apex 를 301 로 접은 이유다.
 - nginx :80 만. HTTPS 없음 → `COOKIE_SECURE=false` (임시. API 기동 시 경고 로그)
 - 로그인 `NTMS` / `admin` / `Ntms#Prod2026!`
   (시드 비밀번호가 저장소에 있고 서버가 공인 IP라 바꿨다)
