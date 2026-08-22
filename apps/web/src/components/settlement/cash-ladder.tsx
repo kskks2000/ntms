@@ -93,7 +93,22 @@ function LadderHead({ ladder }: { ladder: CashLadderData }) {
       {overdueAmount > 0 && (
         <p className="flex items-center gap-1.5 text-caption text-status-warning">
           <AlertTriangle size={13} strokeWidth={2} aria-hidden="true" />
-          결제 기한 초과 {overdue.billingCount + overdue.paymentCount}건 ·{' '}
+          {/*
+            어느 쪽인지 이름을 붙인다.
+
+            사다리는 매출과 매입을 겹쳐 놓으므로 이 건수는 두 쪽의 **합**이다.
+            반면 위의 지표 카드는 지금 보고 있는 한쪽만 센다. 이름이 없으면
+            매출 화면에서 "기한 초과 0건" 바로 아래에 "기한 초과 1건" 이 떠
+            둘 중 하나가 틀린 것처럼 읽힌다.
+          */}
+          결제 기한 초과{' '}
+          {[
+            overdue.billingCount > 0 ? `매출 ${overdue.billingCount}건` : null,
+            overdue.paymentCount > 0 ? `매입 ${overdue.paymentCount}건` : null,
+          ]
+            .filter((v): v is string => v !== null)
+            .join(' · ')}{' '}
+          ·{' '}
           <span className="tabular font-medium">{compactWon(overdueAmount)}원</span>
           {overdue.oldestDays !== null && (
             <span className="text-content-tertiary">최장 {overdue.oldestDays}일</span>

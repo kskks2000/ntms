@@ -267,7 +267,7 @@ export default function InvoicesPage() {
             tone={(data?.summary.awaitingCount ?? 0) > 0 ? 'warning' : 'default'}
           />
           <Stat
-            label="기한 초과"
+            label="기한 넘겨 발행"
             value={data?.summary.overdueCount ?? '—'}
             unit="장"
             tone={(data?.summary.overdueCount ?? 0) > 0 ? 'danger' : 'default'}

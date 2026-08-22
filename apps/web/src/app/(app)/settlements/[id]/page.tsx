@@ -266,7 +266,7 @@ export default function SettlementDetailScreen() {
                 {data.history.map((h, i) => (
                   <li key={`${h.at}-${i}`} className="flex gap-3 px-4 py-2.5">
                     <span className="tabular w-[7.5rem] shrink-0 text-caption text-content-tertiary">
-                      {h.at.slice(5, 16).replace('T', ' ')}
+                      {stampLocal(h.at)}
                     </span>
                     <span className="min-w-0">
                       <span className="block text-label text-content-primary">{h.label}</span>
@@ -1004,7 +1004,7 @@ function InvoicePanel({
 }) {
   const toast = useToast();
   const invalidate = [['settlement', settlementId], ['settlements'], ['settlement-summary'], ['invoices']] as const;
-  const [issueDate, setIssueDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [issueDate, setIssueDate] = useState(todayInput);
 
   const issue = useApiMutation<{ invoiceNo: string | null }, { issueDate: string }>(
     () => ({ path: `/settlements/${settlementId}/invoice`, method: 'POST' }),
@@ -1119,7 +1119,7 @@ function PaymentPanel({
   const invalidate = [['settlement', settlementId], ['settlements'], ['settlement-summary']] as const;
 
   const [amount, setAmount] = useState('');
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayInput);
   const [depositor, setDepositor] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -1263,4 +1263,25 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <dd className="min-w-0 flex-1 text-label text-content-primary">{children}</dd>
     </div>
   );
+}
+
+/**
+ * 오늘 — **로컬 기준**.
+ *
+ * `new Date().toISOString().slice(0, 10)` 은 UTC 날짜라 KST 오전 9시 전에는
+ * **어제**가 나온다. 그 값이 세금계산서 발행일과 수납일로 그대로 저장되고,
+ * 화면은 멀쩡히 그려지므로 아무도 못 본다. 아침에 발행한 계산서만 하루
+ * 앞당겨 찍히는 종류의 사고다.
+ */
+function todayInput(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** timestamptz 를 로컬 시각으로. ISO 문자열을 자르면 UTC 가 보인다 */
+function stampLocal(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }

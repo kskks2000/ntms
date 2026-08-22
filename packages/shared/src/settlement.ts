@@ -1547,7 +1547,23 @@ export interface InvoiceDeadline {
   label: string;
 }
 
-export function invoiceDeadline(yearMonth: string, today: string): InvoiceDeadline {
+export function invoiceDeadline(
+  yearMonth: string,
+  /** 견줄 날. 발행 전이면 오늘, 발행 뒤면 **발행일** */
+  reference: string,
+  /**
+   * 이미 발행된 계산서인가.
+   *
+   * 발행 전이면 축은 "며칠 남았나" 이고 기준은 오늘이다. 발행하고 나면 그
+   * 질문은 끝났고 남는 것은 **"제때 냈나"** 하나뿐이므로, 기준을 발행일로
+   * 바꾸고 문구도 과거형으로 낸다.
+   *
+   * 이것을 안 가르면 지난달 계산서가 영원히 "기한 N일 초과" 로 뜬다 —
+   * 법정 기한에 딱 맞춰 낸 것까지 전부. 그러면 「기한 초과」 지표가 발행한
+   * 장 수와 같아지고, 그 순간 그 숫자는 아무 뜻도 없어진다.
+   */
+  issued = false,
+): InvoiceDeadline {
   const year = Number(yearMonth.slice(0, 4));
   const month = Number(yearMonth.slice(4, 6));
   // 다음 달 10일. 12월이면 해가 넘어간다.
@@ -1556,19 +1572,32 @@ export function invoiceDeadline(yearMonth: string, today: string): InvoiceDeadli
   const dueDate = `${dueY}-${String(dueM).padStart(2, '0')}-10`;
 
   const days = Math.round(
-    (Date.parse(`${dueDate}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000,
+    (Date.parse(`${dueDate}T00:00:00Z`) - Date.parse(`${reference}T00:00:00Z`)) / 86_400_000,
   );
 
-  const tone: InvoiceDeadline['tone'] =
-    days < 0 ? 'over' : days <= 3 ? 'urgent' : days <= 7 ? 'soon' : 'normal';
+  const tone: InvoiceDeadline['tone'] = issued
+    ? days < 0
+      ? 'over'
+      : 'normal'
+    : days < 0
+      ? 'over'
+      : days <= 3
+        ? 'urgent'
+        : days <= 7
+          ? 'soon'
+          : 'normal';
 
   return {
     dueDate,
     daysLeft: days,
-    ratio: Math.max(0, Math.min(1, days / 31)),
+    // 발행이 끝난 줄은 막대가 카운트다운이 아니다. 꽉 채워 "끝났다" 로 둔다.
+    ratio: issued ? 1 : Math.max(0, Math.min(1, days / 31)),
     tone,
-    label:
-      days < 0
+    label: issued
+      ? days < 0
+        ? `기한 ${Math.abs(days)}일 넘겨 발행`
+        : '기한 내 발행'
+      : days < 0
         ? `기한 ${Math.abs(days)}일 초과`
         : days === 0
           ? '오늘이 기한'

@@ -959,7 +959,9 @@ async function main(): Promise<void> {
       { code: 'RT-BIL-TRIP', name: '전세차 운임 (매출)', target: 'BILLING', method: 'PER_TRIP', partner: 'SH-1002', openEnded: false, endsSoon: true, minCharge: 130_000, fuel: false, taxable: true },
       { code: 'RT-PAY-DIST', name: '기본 거리요율 (매입)', target: 'PAYMENT', method: 'DISTANCE', partner: null, openEnded: true, endsSoon: false, minCharge: 75_000, fuel: true, taxable: true },
       { code: 'RT-PAY-CR01', name: '한결운수 계약요율 (매입)', target: 'PAYMENT', method: 'ZONE', partner: 'CR-2001', openEnded: false, endsSoon: false, minCharge: 120_000, fuel: true, taxable: true },
-      { code: 'RT-PAY-SPOT', name: '스팟 운임 (매입)', target: 'PAYMENT', method: 'PER_TRIP', partner: null, openEnded: false, endsSoon: true, minCharge: 110_000, fuel: false, taxable: false },
+      // 화물자동차 운송용역은 과세다. 면세로 두면 이 운송사들의 계산서만
+      // 부가세 0원으로 나가고, 그게 정상인 줄 알게 된다.
+      { code: 'RT-PAY-SPOT', name: '스팟 운임 (매입)', target: 'PAYMENT', method: 'PER_TRIP', partner: null, openEnded: false, endsSoon: true, minCharge: 110_000, fuel: false, taxable: true },
     ] as const;
 
     const yearStart = dateOnly(new Date(new Date().getFullYear(), 0, 1));

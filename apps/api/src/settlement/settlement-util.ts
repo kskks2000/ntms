@@ -109,7 +109,16 @@ export function invoiceRowOf(
     settlementNo: settlement?.settlement_no ?? null,
     settlementType: settlement?.settlement_type ?? null,
     yearMonth: ym,
-    deadline: ym ? invoiceDeadline(ym, today ?? isoDate(startOfToday())) : null,
+    /*
+      발행된 계산서는 **발행일**과 견준다. 오늘과 견주면 지난달 것이 전부
+      "기한 초과" 로 뜬다 — 제때 낸 것까지. `today` 는 아직 발행 안 된
+      줄이 섞여 들어올 때를 위해 남겨 둔다.
+    */
+    deadline: ym
+      ? inv.issue_date
+        ? invoiceDeadline(ym, isoDate(inv.issue_date), true)
+        : invoiceDeadline(ym, today ?? isoDate(startOfToday()))
+      : null,
   };
 }
 

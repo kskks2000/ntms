@@ -250,7 +250,7 @@ function MonthRow({
               </span>
               {closed ? (
                 <span className="block text-caption text-content-tertiary">
-                  {month.closedAt?.slice(0, 10)} {month.closedByName ?? ''} 마감
+                  {month.closedAt ? dayLocal(month.closedAt) : ''} {month.closedByName ?? ''} 마감
                 </span>
               ) : (
                 <span
@@ -320,4 +320,11 @@ function MonthRow({
       )}
     </li>
   );
+}
+
+/** timestamptz 의 로컬 날짜. ISO 를 자르면 UTC 라 오전에는 어제가 나온다 */
+function dayLocal(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
