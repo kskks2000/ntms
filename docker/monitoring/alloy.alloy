@@ -1,0 +1,66 @@
+// =====================================================================
+// Grafana Alloy — 도커 로그를 Loki 로 보낸다
+//
+// Promtail 을 쓰지 않는 이유: Grafana 가 Promtail 을 2026년 3월 EOL 로
+// 못박았다. 지금 새로 놓는 것을 EOL 된 것으로 놓을 이유가 없다.
+//
+// Alloy 는 메트릭 수집도 할 수 있지만 여기서는 **로그만** 맡긴다.
+// 메트릭은 Prometheus 가 익스포터를 직접 긁는다 — 대상 하나가 안 보일 때
+// "익스포터가 죽었나, 중간 수집기가 죽었나" 를 가르지 않아도 되기 때문이다.
+// =====================================================================
+
+// 도커 소켓에서 돌고 있는 컨테이너를 찾는다. 새 컨테이너가 뜨면 15초 안에
+// 로그가 따라 들어온다 — 배포 직후가 가장 보고 싶은 순간이다.
+discovery.docker "containers" {
+	host             = "unix:///var/run/docker.sock"
+	refresh_interval = "15s"
+}
+
+discovery.relabel "containers" {
+	targets = discovery.docker.containers.targets
+
+	// 도커가 주는 이름은 "/ntms-api" 처럼 앞에 슬래시가 붙는다.
+	// 그대로 두면 Drilldown 의 라벨 목록이 전부 슬래시로 시작한다.
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+
+	// stdout 과 stderr 를 가른다. Nest 는 오류를 stderr 로 내보내므로
+	// 이 라벨 하나로 "에러만" 을 클릭 한 번에 만들 수 있다.
+	rule {
+		source_labels = ["__meta_docker_container_log_stream"]
+		target_label  = "stream"
+	}
+
+	// 이미지 태그. 배포 뒤 로그가 이전 이미지 것인지 새 것인지 가른다.
+	rule {
+		source_labels = ["__meta_docker_container_label_org_opencontainers_image_version"]
+		target_label  = "version"
+	}
+
+	// Prometheus 의 external_labels 와 같은 값. 두 데이터소스를 오갈 때
+	// 같은 이름으로 걸러지게 하려는 것이다.
+	rule {
+		target_label = "host"
+		replacement  = "ntms-prod"
+	}
+}
+
+loki.source.docker "containers" {
+	host       = "unix:///var/run/docker.sock"
+	targets    = discovery.relabel.containers.output
+	labels     = {job = "docker"}
+	forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+
+	// Loki 가 잠깐 죽어도 로그를 버리지 않는다. 배포 중에 Loki 만 먼저
+	// 재시작되는 일이 흔하고, 하필 그때가 로그가 제일 필요한 때다.
+	external_labels = {}
+}

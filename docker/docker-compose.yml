@@ -259,6 +259,199 @@ services:
     networks:
       - ntms-net
 
+  # ===================================================================
+  # 모니터링
+  #
+  # 전부 ntms-net 안에만 산다. 호스트 포트를 여는 것은 여전히 nginx 뿐이고,
+  # 밖에서 오는 조회는 nginx 의 /mon/prom/ · /mon/loki/ 로만 들어온다.
+  # 그 두 경로는 Grafana 장비(180.210.77.62)의 IP 로만 열려 있다.
+  #
+  # 익스포터를 따로따로 두는 이유: 대상 하나가 안 보일 때 "익스포터가
+  # 죽었나, 중간 수집기가 죽었나" 를 가르지 않아도 된다. 컨테이너 하나에
+  # curl 한 번이면 어디까지 살아 있는지가 끝난다.
+  # ===================================================================
+
+  # --- 호스트 지표 ---------------------------------------------------
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: ntms-node-exporter
+    restart: unless-stopped
+    # 호스트의 프로세스 네임스페이스를 봐야 컨텍스트 스위치·부하 평균이
+    # 컨테이너 것이 아니라 장비 것으로 나온다.
+    pid: host
+    command:
+      - --path.rootfs=/host
+      # 도커가 만드는 오버레이·바인드 마운트를 세면 디스크 사용률이 같은
+      # 파티션을 수십 번 중복해 잡는다. 그 그래프는 못 쓴다.
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|var/lib/docker/.+)($|/)
+      - --collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|cgroup.*|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|mqueue|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$
+    volumes:
+      # rslave 라야 나중에 붙는 마운트까지 따라온다.
+      - /:/host:ro,rslave
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    networks:
+      - ntms-net
+
+  # --- 컨테이너 지표 -------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: ntms-cadvisor
+    restart: unless-stopped
+    # 서버(Rocky 8)는 SELinux 가 enforcing 이다. privileged 없이는 cgroup 과
+    # /var/lib/docker 를 못 읽어 컨테이너 지표가 통째로 빈다.
+    privileged: true
+    devices:
+      - /dev/kmsg
+    command:
+      # 기본값(1초)은 2 vCPU 짜리 장비에서 cAdvisor 혼자 CPU 를 먹는다.
+      - --housekeeping_interval=15s
+      - --docker_only=true
+      # 안 쓰는 수집기를 끈다. 이것만으로 메모리가 절반 아래로 내려간다.
+      - --disable_metrics=percpu,sched,tcp,udp,advtcp,process,hugetlb,referenced_memory,cpu_topology,resctrl
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+    networks:
+      - ntms-net
+
+  # --- PostgreSQL 지표 -----------------------------------------------
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: ntms-postgres-exporter
+    restart: unless-stopped
+    environment:
+      # 전용 롤 ntms_exporter (pg_monitor 만 가진 읽기 전용).
+      # 슈퍼유저로 붙이지 않는다 — 지표를 보려고 만든 접속이 데이터를
+      # 고칠 수 있으면 그건 더 이상 모니터링이 아니다.
+      DATA_SOURCE_NAME: >-
+        postgresql://ntms_exporter:${POSTGRES_EXPORTER_PASSWORD:?POSTGRES_EXPORTER_PASSWORD 를 .env 에 설정하세요}@postgres:5432/${POSTGRES_DB:-ntms}?sslmode=disable
+      PG_EXPORTER_EXCLUDE_DATABASES: template0,template1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    networks:
+      - ntms-net
+
+  # --- Redis 지표 -----------------------------------------------------
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    container_name: ntms-redis-exporter
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD 를 .env 에 설정하세요}
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+    networks:
+      - ntms-net
+
+  # --- nginx 지표 -----------------------------------------------------
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:1.3.0
+    container_name: ntms-nginx-exporter
+    restart: unless-stopped
+    command:
+      # stub_status 창구. conf.d/ntms.conf 의 /nginx-status 이고, 도커
+      # 네트워크 안에서만 열려 있다.
+      - --nginx.scrape-uri=http://nginx:80/nginx-status
+    depends_on:
+      - nginx
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+    networks:
+      - ntms-net
+
+  # --- 지표 저장 ------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: ntms-prometheus
+    restart: unless-stopped
+    user: root
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # 15일. 더 길게 두려면 디스크부터 본다 — 대상 6개에 15초 간격이면
+      # 하루 100MB 안팎이다.
+      - --storage.tsdb.retention.time=15d
+      # Grafana 는 API 만 쓰지만, 사람이 /mon/prom/ 을 브라우저로 열었을 때
+      # 화면 안의 링크가 깨지지 않게 외부 주소를 알려 준다.
+      - --web.external-url=http://www.qqq.ai.kr/mon/prom/
+      - --web.route-prefix=/
+      - --web.enable-lifecycle
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro,z
+      - prometheus-data:/prometheus
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    networks:
+      - ntms-net
+
+  # --- 로그 저장 ------------------------------------------------------
+  loki:
+    image: grafana/loki:3.3.2
+    container_name: ntms-loki
+    restart: unless-stopped
+    user: root
+    command:
+      - -config.file=/etc/loki/loki.yml
+    volumes:
+      - ./monitoring/loki.yml:/etc/loki/loki.yml:ro,z
+      - loki-data:/loki
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+    networks:
+      - ntms-net
+
+  # --- 로그 수집 ------------------------------------------------------
+  alloy:
+    image: grafana/alloy:v1.5.1
+    container_name: ntms-alloy
+    restart: unless-stopped
+    # 도커 소켓은 root 소유다. 소켓을 읽어야 컨테이너 로그를 붙잡을 수 있다.
+    user: root
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./monitoring/alloy.alloy:/etc/alloy/config.alloy:ro,z
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    depends_on:
+      - loki
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+    networks:
+      - ntms-net
+
 volumes:
   postgres-data:
     name: ntms-postgres-data
@@ -270,6 +463,12 @@ volumes:
     name: ntms-certbot-conf
   nginx-logs:
     name: ntms-nginx-logs
+  prometheus-data:
+    name: ntms-prometheus-data
+  loki-data:
+    name: ntms-loki-data
+  alloy-data:
+    name: ntms-alloy-data
 
 networks:
   ntms-net:

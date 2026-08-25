@@ -1,0 +1,60 @@
+# =====================================================================
+# Loki — 단일 노드 · 파일시스템 저장
+#
+# 클러스터 구성이 아니다. 장비 한 대의 도커 로그만 담으므로 링도 인메모리로
+# 두고 복제도 1이다. 이 설정으로 Loki 를 여러 대로 늘리면 데이터가 갈린다 —
+# 늘릴 일이 생기면 object storage(S3 호환) 로 먼저 옮겨야 한다.
+# =====================================================================
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  # 기본 로그 레벨이 info 면 Loki 자기 로그가 도커 로그를 다시 채운다.
+  # 그 로그를 또 Loki 가 담는 고리가 생긴다.
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    # v13 + tsdb 가 Loki 3.x 의 현행 조합이다. from 은 과거 날짜로 둔다 —
+    # 미래 날짜로 두면 그 전에 들어온 로그가 어느 스키마에도 안 걸린다.
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  # 14일. 디스크가 85G 남아 있지만 로그는 조용히 늘어나므로 기한을 박아 둔다.
+  retention_period: 336h
+  # 시드를 다시 돌리거나 컨테이너 시계가 어긋나면 과거 타임스탬프가 들어온다.
+  # 그걸 거절하면 그 시간대가 통째로 비는데, 비어 있는 것과 없는 것을
+  # 화면에서 구별할 수 없다. 받아 둔다.
+  reject_old_samples: false
+  volume_enabled: true
+
+compactor:
+  working_directory: /loki/compactor
+  # retention_period 를 실제로 지우는 것은 컴팩터다. 이걸 안 켜면 기한만
+  # 적어 두고 디스크는 계속 찬다.
+  retention_enabled: true
+  delete_request_store: filesystem
+
+# 사용 통계 전송을 끈다. 폐쇄망으로 옮겨도 기동이 느려지지 않는다.
+analytics:
+  reporting_enabled: false

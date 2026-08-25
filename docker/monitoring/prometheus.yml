@@ -1,0 +1,57 @@
+# =====================================================================
+# Prometheus — NTMS 단일 VM 수집 설정
+#
+# 여기서 긁은 것을 Grafana(grafana.aitestbed.kr, 180.210.77.62)가 nginx 의
+# /mon/prom/ 경로로 조회한다. Prometheus 자체는 호스트 포트를 열지 않는다 —
+# 인터넷에 노출되는 지점은 여전히 nginx 하나뿐이다.
+#
+# 대상은 전부 compose 서비스 이름으로 적는다. ntms-net 안에서 DNS 로 풀린다.
+# =====================================================================
+
+global:
+  # 15초. 2 vCPU 짜리 장비에 6개 대상이면 부담이 없고, Drilldown 에서
+  # 급한 변화(배포 직후 재시작, 커넥션 폭증)를 놓치지 않는 간격이다.
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+
+  # 나중에 장비가 늘면 이 라벨로 가른다. 지금은 하나뿐이지만 미리 붙여
+  # 두어야, 두 번째 장비가 생겼을 때 기존 그래프가 통째로 뒤섞이지 않는다.
+  external_labels:
+    host: ntms-prod
+
+scrape_configs:
+  # 자기 자신. Prometheus 가 죽어가는 것(메모리, WAL 재생)은 여기서만 보인다.
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # 호스트 — CPU · 메모리 · 디스크 · 네트워크
+  # 이 프로젝트에서 제일 먼저 찰 곳은 디스크다. GPS 자취와 감사로그가
+  # 계속 쌓이고, 시드를 --reset 으로 다시 돌려도 줄어들지 않는다.
+  - job_name: node
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # 컨테이너별 CPU · 메모리 · 재시작
+  # nginx 가 unhealthy 로 떨어졌을 때 재시작 횟수가 여기서 보인다.
+  - job_name: cadvisor
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # PostgreSQL — 커넥션 수가 핵심이다.
+  # 서버 DSN 에 connection_limit=20 이 걸려 있어, 이 수가 천장에 닿으면
+  # 화면은 "잠시 후 다시 시도" 만 뱉는다. 그 원인을 여기서 먼저 본다.
+  - job_name: postgres
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+
+  # Redis — 세션과 로그인 레이트리밋이 사는 곳
+  - job_name: redis
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+  # nginx — 4xx/5xx 와 처리 중인 커넥션
+  - job_name: nginx
+    static_configs:
+      - targets: ['nginx-exporter:9113']
