@@ -292,8 +292,19 @@ Loki 주소에 `/loki` 를 또 붙이지 않는다. Grafana 가 스스로 `/loki
   비밀번호가 그대로 흘러간다. 출발지 IP 로 막는 편이 낫다. HTTPS 를 켜면
   그때 얹는다.
 - **Grafana 장비의 아웃바운드 IP 가 A 레코드와 다를 수 있다**(NAT).
-  데이터소스 테스트가 403 이면 실제 출발지를 보고 `allow` 를 고친다:
-  `docker exec ntms-nginx grep '/mon/' /var/log/nginx/access.log | tail`
+  데이터소스 테스트가 403 이면 실제 출발지를 본다. **access.log 를 grep 하지
+  말 것** — nginx 이미지에서 그 파일은 `/dev/stdout` 심볼릭 링크라 grep 이
+  파이프를 열고 EOF 를 기다리며 영영 안 끝난다(`nginx-logs` 볼륨에도 심볼릭
+  링크만 들어 있다. 파일로 남는 로그가 애초에 없다).
+
+  로그는 도커 stdout 으로 나가고 Alloy 가 Loki 로 넣으므로 Loki 에 묻는다.
+  거부된 요청은 `access forbidden by rule, client: <IP>` 로 남는다.
+
+  ```bash
+  ssh ntms "curl -s -G http://127.0.0.1/mon/loki/loki/api/v1/query_range \
+    --data-urlencode 'query={container=\"ntms-nginx\"} |= \"/mon/\"' \
+    --data-urlencode since=24h --data-urlencode limit=40"
+  ```
 - **DB 는 전용 롤로 붙는다.** `ntms_exporter` 는 `pg_monitor` 만 가진다 —
   통계 뷰만 읽고 `ntms` 스키마의 행은 못 본다. 비밀번호 발급·교체는
   `bash docker/monitoring/create-exporter-role.sh` (서버에서 만들어 `.env` 에
