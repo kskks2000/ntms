@@ -326,7 +326,12 @@ services:
 
   # --- PostgreSQL 지표 -----------------------------------------------
   postgres-exporter:
-    image: prometheuscommunity/postgres-exporter:v0.15.0
+    # v0.15.0 은 PostgreSQL 18 에서 stat_bgwriter 수집기가 죽는다.
+    # PG 17 부터 체크포인트 통계가 pg_stat_bgwriter 에서 pg_stat_checkpointer 로
+    # 빠지면서 칸 이름까지 바뀌었는데(checkpoints_timed → num_timed), 옛 이름을
+    # 계속 묻다가 15초마다 실패했다. 지표가 빠지는 것도 문제지만, 실패한 질의가
+    # postgres 로그에 그대로 찍혀 **시간당 3천 줄**이 Loki 로 흘러들었다.
+    image: prometheuscommunity/postgres-exporter:v0.18.0
     container_name: ntms-postgres-exporter
     restart: unless-stopped
     environment:
