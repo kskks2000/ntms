@@ -1,0 +1,16 @@
+// 테스트 전용 타입검사 설정.
+//
+// 빌드용 tsconfig.json 은 test/ 를 exclude 한다 — nest build 가 테스트를
+// dist 에 넣으면 안 되기 때문이다. 그런데 그대로 두면 테스트 파일의 타입
+// 오류가 `pnpm typecheck` 를 통과해 버리고, 그러면 테스트가 **가장 먼저
+// 썩는 코드**가 된다. 여기서 한 번 더 돈다.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src/**/*", "test/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

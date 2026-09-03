@@ -1,0 +1,17 @@
+// 테스트 전용 타입검사 설정.
+//
+// 빌드용 tsconfig.json 은 `include: ["src/**/*"]` 라 test/ 를 안 본다. 그대로
+// 두면 테스트 파일의 타입 오류가 `pnpm typecheck` 를 통과해 버리고, 그러면
+// 테스트가 **가장 먼저 썩는 코드**가 된다. 여기서 한 번 더 돈다.
+//
+// dist 에는 아무것도 안 내보낸다 — 테스트는 배포물이 아니다.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "rootDir": ".",
+    "types": ["vitest/globals"]
+  },
+  "include": ["src/**/*", "test/**/*"]
+}
