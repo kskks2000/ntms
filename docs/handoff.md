@@ -246,6 +246,8 @@ pnpm test           # 125개
 | 증상 | 원인 · 조치 |
 |---|---|
 | `EPERM ... query_engine-windows.dll.node` | API 가 뜬 채로 빌드했다. 3000·4000 포트의 node 를 죽이고 다시 |
+| `pnpm dev` 가 `EADDRINUSE :::3000` | 앞서 띄운 dev 서버가 아직 살아 있다. 소유자를 먼저 찾는다 — `Get-NetTCPConnection -State Listen -LocalPort 3000` 의 `OwningProcess`. **`Stop-Process -Name node` 로 한 번에 죽이지 말 것**: 편집기 언어 서버까지 날아간다 |
+| 그 프로세스가 `액세스가 거부되었습니다` | 그 dev 서버가 지금 셸보다 높은 권한으로 떠 있다. **관리자 PowerShell** 에서 `Stop-Process -Id <PID> -Force` 를 해야 한다. 급하면 포트를 바꿔 피한다 — `$env:PORT=3001; pnpm --filter @ntms/web dev` |
 | `pnpm lint` 에서 web 실패 | `apps/web` 에 eslint 설정 파일이 아예 없다. `next lint` 가 대화형 설정을 물어보는 것 — **기존 상태이고 코드 문제가 아니다** |
 | psql 로 조회했는데 0행 | `DATABASE_URL`(ntms_app)로 붙었다. `ADMIN_DATABASE_URL` 을 쓸 것 |
 | 화면이 한산하다 | 데모 트립 시각이 **실행 시점 기준**이다. `seed:demo -- --reset` 을 다시 돌린다 |
