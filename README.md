@@ -50,10 +50,13 @@ docker/           가동계 배포
 
 | 문서 | 내용 |
 |---|---|
-| [`docs/handoff.md`](docs/handoff.md) | **인수인계** — 진행 상황 · 규칙 · 지뢰 |
-| [`docs/design-system.md`](docs/design-system.md) | 디자인 시스템 "관제" |
+| [`docs/handoff.md`](docs/handoff.md) | **인수인계 — 여기부터.** 진행 상황 · 규칙 · 지뢰 · 문서 지도 |
+| [`docs/06-frontend/`](docs/06-frontend/) | 디자인 시스템 "관제" · 화면을 만들 때 지켜야 하는 것 |
+| [`docs/07-development/`](docs/07-development/) | 로컬에서 띄우기 · 시드 규칙 |
+| [`docs/08-testing/`](docs/08-testing/) | 무엇을 테스트하고 무엇을 안 하나 |
+| [`docs/09-operations/`](docs/09-operations/) | 가동계 배포 · 모니터링 |
 | [`db/README.md`](db/README.md) | 스키마 · 마이그레이션 |
-| [`docker/README.md`](docker/README.md) | 가동계 배포 |
+| [`docker/README.md`](docker/README.md) | 컨테이너 구성 |
 
 커밋 메시지에는 **왜 그렇게 했는지**를 길게 적어 둔다.
 `git log --format='%h %s%n%n%b' -12` 로 훑으면 판단의 흐름이 보인다.

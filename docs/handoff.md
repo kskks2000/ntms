@@ -1,9 +1,14 @@
 # NTMS 인수인계
 
 이 문서는 **다음 사람(또는 다음 세션)이 이어서 개발할 수 있게** 쓴 것이다.
-스키마는 `db/README.md`, 원격 배포는 `docker/README.md`, 디자인 언어는
-`docs/design-system.md` 에 있으므로 여기서는 링크만 걸고 **그 문서들에 없는
-것** — 지금까지 내린 판단과 그 이유, 밟았던 지뢰 — 을 적는다.
+**여기가 입구다** — 처음부터 끝까지 한 번 읽는 것을 전제로 쓴다.
+
+절차와 참조(로컬 띄우기 · 시드 · 배포 · 모니터링 · 디자인 · 테스트)는 주제별
+문서로 나가 있고 8절이 그 지도다. 여기 남긴 것은 그 문서들에 없는 것 —
+**지금까지 내린 판단과 그 이유, 밟았던 지뢰**다.
+
+특히 4절 「절대 어기면 안 되는 것」은 나누지 않았다. 흩어 놓으면 "먼저 읽어야
+할 것" 이라는 성격이 사라지고, 그러면 다음 사람이 같은 지뢰를 다시 밟는다.
 
 마지막 갱신: 2026-08-22 (정산 — 파이프라인이 닫혔다)
 
@@ -166,240 +171,20 @@ ntms_admin  BYPASSRLS  시드·점검 전용. 앱 컨테이너에 절대 넣지 
 - 네이버 **Client Secret 은 서버 전용**. 브라우저로 나가는 건 Client ID 뿐이고,
   그건 NCP 콘솔의 도메인 등록으로 보호한다.
 
----
+### 여기까지 읽었으면 띄워 본다
 
-## 5. 로컬에서 띄우기
+절차는 [`07-development/local-setup.md`](07-development/local-setup.md) 에 있다 —
+DDL 부터 시드까지 순서대로, 그리고 로컬에서 자주 밟는 것들.
+데이터가 어떤 모양이어야 하는지는
+[`07-development/seed.md`](07-development/seed.md), 검증은
+[`08-testing/README.md`](08-testing/README.md).
 
-전제: Node 24+ · pnpm 10+ · PostgreSQL 18 · 루트에 `.env`
-
-```bash
-pnpm install
-pnpm db:create
-PGCLIENTENCODING=UTF8 pnpm db:ddl          # Windows 는 인코딩 고정 필수
-MIGRATE_TARGET=native bash db/migrate.sh
-pnpm db:pull                                # Prisma 모델 · 클라이언트
-pnpm --filter @ntms/api seed                # 권한 · 역할 · 메뉴 · 테넌트 · 관리자 · 공통코드
-pnpm --filter @ntms/api seed:demo -- --reset  # 데모 운영 데이터 + 데모 계정 18명
-pnpm dev                                    # api :4000 + web :3000
-```
-
-`http://localhost:3000/login` → `NTMS` / `admin` / `Ntms@2026!log`
-
-데모 계정 18명(`jhkim` `sylee` `bwoh` …)의 비밀번호는 `DEMO_USER_PASSWORD`
-환경변수로 정하고, 안 주면 로컬 기본값을 쓴다. **가동계에서는 반드시 넣는다**
-— 안 넣으면 저장소에 적힌 비밀번호 계정이 열여덟 개 생긴다. 6절 참고.
-
-### 검증 — 타입검사와 테스트
-
-```bash
-pnpm typecheck      # 6/6. 테스트 파일까지 본다
-pnpm test           # 125개
-```
-
-#### 무엇을 테스트하고 무엇을 안 하나
-
-테스트는 **`packages/shared` 의 판정 로직과 `apps/api` 의 순수 함수**에만
-있다. 컨트롤러·서비스·화면에는 없다. 의도한 선이다 — 이 저장소에서 실제로
-난 사고가 전부 그 판정 로직에 있었기 때문이다.
-
-| 파일 | 지키는 것 | 실제로 났던 사고 |
-|---|---|---|
-| `shared/test/rate.test.ts` | 요율 체인 순서 · 구간 경계 · 최저액 · 절사 · 유류할증 · `total = supply + tax` | — |
-| `api/test/rate-book.test.ts` | **승인된 표가 사라지지 않는다** · 계약이 지정한 표가 맨 앞 · 순서가 실행마다 같다 | 공통표가 키 충돌로 덮여 운송사들이 스팟 단가로 지급됐다 |
-| `shared/test/invoice-deadline.test.ts` | 발행 전은 "며칠 남았나", 발행 후는 "제때 냈나" | 제때 낸 계산서가 영원히 "기한 초과" 로 떴다 |
-| `api/test/settlement-util.test.ts` | `date` 컬럼의 UTC 자정 규칙 · 월 경계 · 윤년 | 발행일·수납일이 KST 오전에 하루 밀렸다 |
-| `shared/test/settlement-gate.test.ts` | 관문의 blocker / caution 구분 · 상태 전이 | — |
-| `shared/test/actual-gate.test.ts` | 확정 관문 · 거리 편차 15% 경계 | — |
-| `shared/test/cash-ladder.test.ts` | 걸린 돈이 음수가 안 된다 · 마진 · 0 나눗셈 | — |
-
-#### 이 테스트가 실제로 잡는지 확인한 방법
-
-세 버그를 **일부러 다시 넣어 보고** 빨간 줄이 나는 것을 봤다. 통과하는
-테스트를 쌓는 것은 쉽지만, 그게 무언가를 지키는지는 별개다.
-
-  · 계약이 지정한 표를 안 보게 바꿈 → 1개 실패
-  · 공통표가 서로를 덮게 바꿈 → 4개 실패
-  · 발행된 계산서를 오늘과 견주게 바꿈 → 4개 실패
-
-#### 새 테스트를 붙일 때
-
-- **`packages/shared/test/`** 와 **`apps/api/test/`** 에 둔다. `src/` 안에
-  두지 않는다 — 빌드 tsconfig 가 `src/**/*` 를 그대로 내보내므로 dist 에
-  테스트가 섞인다.
-- 그래서 각 패키지에 `tsconfig.test.json` 이 따로 있다. 빌드용 설정은 test 를
-  안 보기 때문에, 이게 없으면 **테스트 파일의 타입 오류가 typecheck 를 통과**
-  하고 테스트가 가장 먼저 썩는 코드가 된다.
-- 조건 칸이 많은 타입(`RateLineSpec` 은 스물 몇 개)은 `test/fixtures.ts` 의
-  기본값에 얹는다. 매번 다 적으면 **무엇을 시험하는 줄인지가 안 보인다.**
-- DB 가 필요해 보이면 한 번 더 생각한다. `loadRateBook` 도 tx 에서 쓰는 것이
-  `findMany` 둘뿐이라 대역으로 끝났다. 그 함수가 답해야 하는 것은 질의가
-  아니라 **모아 놓은 뒤의 순서**였기 때문이다.
-
-#### 아직 없는 것
-
-컨트롤러(창구별 권한·검증), 서비스(트랜잭션·RLS), 화면. 이것들은 DB나
-브라우저가 있어야 해서 성격이 다르다. 지금은 `pnpm typecheck` 와 시드를
-돌린 뒤의 눈 확인이 그 자리를 메우고 있다.
-
-### 자주 밟는 것
-
-| 증상 | 원인 · 조치 |
-|---|---|
-| `EPERM ... query_engine-windows.dll.node` | API 가 뜬 채로 빌드했다. 3000·4000 포트의 node 를 죽이고 다시 |
-| `pnpm dev` 가 `EADDRINUSE :::3000` | 앞서 띄운 dev 서버가 아직 살아 있다. 소유자를 먼저 찾는다 — `Get-NetTCPConnection -State Listen -LocalPort 3000` 의 `OwningProcess`. **`Stop-Process -Name node` 로 한 번에 죽이지 말 것**: 편집기 언어 서버까지 날아간다 |
-| 그 프로세스가 `액세스가 거부되었습니다` | 그 dev 서버가 지금 셸보다 높은 권한으로 떠 있다. **관리자 PowerShell** 에서 `Stop-Process -Id <PID> -Force` 를 해야 한다. 급하면 포트를 바꿔 피한다 — `$env:PORT=3001; pnpm --filter @ntms/web dev` |
-| `pnpm lint` 에서 web 실패 | `apps/web` 에 eslint 설정 파일이 아예 없다. `next lint` 가 대화형 설정을 물어보는 것 — **기존 상태이고 코드 문제가 아니다** |
-| psql 로 조회했는데 0행 | `DATABASE_URL`(ntms_app)로 붙었다. `ADMIN_DATABASE_URL` 을 쓸 것 |
-| 화면이 한산하다 | 데모 트립 시각이 **실행 시점 기준**이다. `seed:demo -- --reset` 을 다시 돌린다 |
-| 로그인이 갑자기 안 된다 | `/auth/login` 은 **IP당 5분에 10회**다(`auth.controller.ts`). API 를 검증하며 curl 로 여러 번 부르면 브라우저 몫까지 쓴다. 한도를 낮추지 말고 API 를 재기동해 카운터를 비운다 |
-| 공통코드 화면이 비었다 | `seed`(demo 아님)를 안 돌렸다. 코드 그룹은 기준정보라 `seed.ts` 에 있다 |
-| 정산 화면이 비었다 | `seed:demo` 가 정산까지 만든다. 시드 로그 끝줄에 `정산 N건 …` 이 있는지 볼 것. 없으면 `admin` 계정이 없다는 뜻이다(=`seed` 를 안 돌렸다) |
-| 정산 화면 기본 달이 지난달이다 | **의도한 것이다.** 이번 달은 계산서도 수금도 아직 있을 수 없어 사다리 아랫단이 빈다 |
+가동계에 올리는 것은 [`09-operations/deploy.md`](09-operations/deploy.md) 다.
+**로컬과 서버의 비밀번호가 일부러 다르다**는 것만 위에서 다시 확인하고 넘어갈 것.
 
 ---
 
-## 6. 가동계
-
-**마지막 배포: 2026-08-22 커밋 `cbd5d9b`** (정산까지 전부, 시드 적재 완료 —
-`seed.js` 로 부대비 유형과 테넌트 사업자등록번호를 채운 뒤 `seed-demo.js --reset`).
-지금 무엇이 올라가 있는지는 `ssh ntms 'cd /opt/ntms && git log --oneline -1'` 로 본다.
-
-- VM `175.45.193.174` · **정규 주소는 `http://www.qqq.ai.kr`**
-  - apex `qqq.ai.kr` 은 nginx 가 www 로 301 한다. 공인 IP 는 catch-all 로 그대로
-    열려 있다 — `deploy.sh` 의 배포 검증이 IP 로 들어오기 때문이다.
-  - `PUBLIC_ORIGIN` 이 정규 주소를 들고, 여기서 `CORS_ORIGIN`(api)과
-    `NEXT_PUBLIC_API_URL`(web 빌드 인자)이 파생된다. **바꾸면 재빌드가 필요하다** —
-    `NEXT_PUBLIC_*` 는 빌드 시점에 박힌다. `deploy.sh` 는 `up -d --build` 라 같이 된다.
-  - 다만 브라우저가 실제로 부르는 주소는 `apps/web/src/lib/api-client.ts` 의
-    `const BASE = '/api'` — **상대경로**다. 그래서 어느 이름으로 들어와도 같은
-    출처의 `/api` 를 부르고, CORS 와 쿠키 도메인 문제가 애초에 안 생긴다.
-    `PUBLIC_ORIGIN` 이 틀려도 화면은 멀쩡히 도는 이유가 이것이다 — 값이 맞는지는
-    화면으로 확인할 수 없으니 `.env` 를 직접 볼 것.
-  - 리프레시 쿠키에 `domain` 속성이 없다(host-only). 이름이 여럿이면 이름마다
-    세션이 따로 생긴다 — apex 를 301 로 접은 이유다.
-- nginx :80 만. HTTPS 없음 → `COOKIE_SECURE=false` (임시. API 기동 시 경고 로그)
-- 로그인 `NTMS` / `admin` / `Ntms#Prod2026!`
-  (시드 비밀번호가 저장소에 있고 서버가 공인 IP라 바꿨다)
-
-```bash
-# 배포
-git push origin dev
-ssh ntms 'cd /opt/ntms && git fetch origin && git reset --hard origin/dev -q'
-ssh ntms 'cd /opt/ntms && bash docker/deploy.sh'
-```
-
-```bash
-# 시드 — ADMIN_DATABASE_URL 을 일회성 컨테이너에만 주입한다
-ssh ntms 'cd /opt/ntms && set -a && . ./.env && set +a && \
-  docker compose -f docker/docker-compose.yml --env-file .env run --rm --no-deps \
-  -e ADMIN_DATABASE_URL="postgresql://ntms_admin:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ntms}?schema=ntms" \
-  api node apps/api/dist/scripts/seed.js'
-```
-
-`seed-demo.js` 도 같은 방식이되 **비밀번호를 반드시 갈아끼운다.** 안 넣으면
-저장소에 적힌 값으로 데모 계정 18개가 생기고, 이 서버는 공인 IP 에 HTTP 다.
-
-```bash
-ssh ntms 'cd /opt/ntms && set -a && . ./.env && set +a &&   docker compose -f docker/docker-compose.yml --env-file .env run --rm --no-deps   -e ADMIN_DATABASE_URL="postgresql://ntms_admin:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ntms}?schema=ntms"   -e DEMO_USER_PASSWORD="$(openssl rand -base64 18)"   api node apps/api/dist/scripts/seed-demo.js -- --reset'
-```
-
-무작위로 넣으면 그 계정으로는 아무도 못 들어온다 — 데모 화면을 채우는 것이
-목적이고 로그인은 `admin` 으로 하기 때문에 그것으로 충분하다. 시드 로그
-끝줄이 `(비밀번호: 환경변수)` 인지 확인할 것.
-
-`docker-compose.yml` 의 api 서비스에 `ADMIN_DATABASE_URL` 을 **넣지 말 것.**
-앱 컨테이너가 BYPASSRLS DSN 을 상시 들고 있으면 침해 시 테넌트 격리가 통째로
-무너진다.
-
-### 모니터링 — Prometheus · Loki · Grafana
-
-Grafana 는 **다른 장비**에 있다 (`grafana.aitestbed.kr` = 180.210.77.62).
-저장소만 이 서버에 두고 Grafana 가 조회한다.
-
-```
-[NTMS 175.45.193.174]                         [Grafana 180.210.77.62]
-  node-exporter     ┐
-  cadvisor          │
-  postgres-exporter ├→ prometheus ─┐
-  redis-exporter    │              ├ nginx /mon/prom/  ←── Grafana
-  nginx-exporter    ┘              │      /mon/loki/
-  도커 로그 → alloy → loki ────────┘
-```
-
-**포트를 새로 열지 않는다.** 전부 `ntms-net` 안에만 살고, 밖으로 나가는
-창구는 nginx 의 `/mon/prom/` `/mon/loki/` 둘뿐이며 Grafana 장비 IP 로만
-열려 있다. 밖에서 부르면 403 이다.
-
-Grafana 에 등록된 데이터소스 URL:
-
-| 종류 | URL |
-|---|---|
-| Prometheus | `http://www.qqq.ai.kr/mon/prom` |
-| Loki | `http://www.qqq.ai.kr/mon/loki` |
-
-Loki 주소에 `/loki` 를 또 붙이지 않는다. Grafana 가 스스로 `/loki/api/v1/…`
-을 붙이므로 `/mon/loki/loki/api/v1/…` 로 들어와 맞아떨어진다.
-
-#### 알아 둘 것
-
-- **basic auth 를 일부러 안 걸었다.** 평문 HTTP 라 인증을 걸면 15초마다
-  비밀번호가 그대로 흘러간다. 출발지 IP 로 막는 편이 낫다. HTTPS 를 켜면
-  그때 얹는다.
-- **Grafana 장비의 아웃바운드 IP 가 A 레코드와 다를 수 있다**(NAT).
-  데이터소스 테스트가 403 이면 실제 출발지를 본다. **access.log 를 grep 하지
-  말 것** — nginx 이미지에서 그 파일은 `/dev/stdout` 심볼릭 링크라 grep 이
-  파이프를 열고 EOF 를 기다리며 영영 안 끝난다(`nginx-logs` 볼륨에도 심볼릭
-  링크만 들어 있다. 파일로 남는 로그가 애초에 없다).
-
-  로그는 도커 stdout 으로 나가고 Alloy 가 Loki 로 넣으므로 Loki 에 묻는다.
-  거부된 요청은 `access forbidden by rule, client: <IP>` 로 남는다.
-
-  ```bash
-  ssh ntms "curl -s -G http://127.0.0.1/mon/loki/loki/api/v1/query_range \
-    --data-urlencode 'query={container=\"ntms-nginx\"} |= \"/mon/\"' \
-    --data-urlencode since=24h --data-urlencode limit=40"
-  ```
-- **DB 는 전용 롤로 붙는다.** `ntms_exporter` 는 `pg_monitor` 만 가진다 —
-  통계 뷰만 읽고 `ntms` 스키마의 행은 못 본다. 비밀번호 발급·교체는
-  `bash docker/monitoring/create-exporter-role.sh` (서버에서 만들어 `.env` 에
-  직접 넣는다. 사람 손을 안 거친다).
-- **보관 기간**: Prometheus 15일, Loki 14일. Loki 는 컴팩터가 실제로 지운다
-  (`retention_enabled: true` 를 빼면 기한만 적어 두고 디스크는 계속 찬다).
-- **자원**: 여덟 컨테이너 합쳐 약 220MB · CPU 1% 미만. 상한은 넉넉히 잡아
-  두었다(cAdvisor 384M, Prometheus 1G, Loki 768M).
-- `deploy.sh` 의 헬스 검증은 컨테이너 다섯을 **명시적으로** 돈다. 여기에
-  서비스를 더해도 배포 검증이 깨지지 않는 이유다.
-
-#### 자주 볼 것
-
-| 질문 | 어디서 |
-|---|---|
-| 디스크가 언제 차나 | Metrics Drilldown → `node_filesystem_avail_bytes` |
-| DB 커넥션이 천장(20)에 닿았나 | `pg_stat_activity_count` |
-| 컨테이너가 재시작하고 있나 | `container_start_time_seconds` |
-| 로그인 429 가 났나 | Logs Drilldown → `container=ntms-api` |
-| 배포 직후 에러 | Logs Drilldown → `stream=stderr` |
-
-앱 자체 지표(창구별 지연·에러율)는 아직 없다. NestJS 에 `prom-client` 를
-붙이고 `/metrics` 를 열면 되는데, 그 창구도 `/mon/` 처럼 밖에서 막아야 한다.
-
-### 밟았던 것
-
-- **동적 경로가 502** — nginx `proxy_buffer_size` 4k 가 Next.js 의 폰트 preload
-  `link:` 헤더보다 작았다. 64k / `proxy_buffers 8 64k` 로 올려 해결.
-- **새로고침하면 로그아웃** — `cookieSecure = isProd` 인데 HTTP 라 쿠키가 안
-  실렸다. `COOKIE_SECURE` 환경변수로 분리.
-- **DNS lame delegation** — `.kr` 이 gabia NS 를 가리키는데 gabia 가 REFUSED.
-  사용자가 직접 고쳤다. 서버 쪽(`server_name _;`)은 처음부터 정상이었다.
-
----
-
-## 7. 디자인 — "관제 (Control Room)"
-
-자세한 것은 `docs/design-system.md`. 여기서는 **새 화면을 만들 때 지켜야 하는
-것**만.
-
-### 축 어휘 — 이 앱의 서명
+## 5. 축 어휘 — 이 앱의 서명
 
 화면마다 하나의 축을 세우고, 그 축에서 벗어난 정도로 문제를 보여준다.
 새 화면을 만들면 **그 화면의 축이 무엇인지 먼저 정한다.**
@@ -424,81 +209,9 @@ Loki 주소에 `/loki` 를 또 붙이지 않는다. Grafana 가 스스로 `/loki
 축은 오른쪽이 늦은 것이고, 권한 격자는 오른쪽이 되돌릴 수 없는 것이다.
 새 축을 세울 때 "오른쪽이 무엇인가" 를 먼저 정하면 나머지가 따라온다.
 
-### 지켜야 하는 것
-
-- **토큰만 쓴다.** 색·간격·반경을 직접 적지 않는다 (`text-content-primary`,
-  `bg-surface-card`, `border-line-subtle`, `rounded-card` …).
-- `.eyebrow` 는 **라틴·숫자 전용**이다. 자간을 벌리므로 한글에 걸면 "통 합 연 계"
-  처럼 낱글자가 흩어진다. 한글 마이크로 라벨은 `.eyebrow-ko`.
-- 숫자·시각·코드에는 `.tabular` — 자릿수가 흔들리면 표에서 줄이 안 맞는다.
-- 폼은 `noValidate` 를 반드시 붙인다. 안 붙이면 브라우저 기본 검증이 submit 을
-  가로채 zod 오류가 화면에 영영 안 뜬다.
-- 빈 화면은 "없습니다" 로 끝내지 않는다. 왜 비었는지와 다음에 할 일을 적는다.
-- 범례 없는 그림은 그림에 그친다. 막대·색이 뭘 뜻하는지 적는다.
-
-### 글
-
-- 화면이 답해야 하는 질문을 제목으로 삼는다. "무엇이 시간을 먹나" 처럼.
-- 지난 일과 지금 할 일을 갈라 쓴다. 끝난 운송에 "미리 알리세요" 라고 적으면
-  그 문구는 곧 아무도 안 읽는 배경이 된다.
-- 경보를 남발하지 않는다. 한 번 안 믿기 시작한 경보는 진짜일 때도 안 본다.
-
 ---
 
-## 8. 시드가 지켜야 하는 것 (`apps/api/src/scripts/seed-demo.ts`)
-
-집계 화면은 데이터 없이 설계할 수 없다. 그래서 시드는 "행을 채우는 것" 이 아니라
-**화면이 판단할 거리를 만드는 것**이다. 지금까지 알아낸 규칙:
-
-1. **상태가 시각을 정한다.** 차량 가용성으로 시각을 정하고 상태를 나중에 붙이면
-   '완료' 트립이 밤 11시에 끝난다. 그러면 인수증 경과가 전부 0시간이 되고
-   정시율이 아직 오지 않은 도착을 센다. 지금은 시각을 먼저 정하고 **그 시각에
-   비어 있는 차**를 고른다.
-2. **짝지어 꺼낸다.** 예외 유형·설명, 인수 결과·사유를 따로 뽑으면 "차량고장 —
-   고속도로 정체로 지연" 같은 줄이 나오고, 보는 사람은 그 한 줄에서 데이터
-   전체를 못 믿기 시작한다. `EXCEPTION_KINDS` · `POD_FLAWS` 처럼 묶어 둔다.
-3. **난수보다 나머지 연산.** `rnd()` 는 고정 시드라, 확률로 뽑으면 어떤 종류가
-   한 건도 안 나오는 수가 있다. 화면에 그 칸이 늘 비면 그 칸을 아무도 안 본다.
-   `executionCount % 3 === 1` 처럼 확정적으로 흩는다.
-4. **분포에 두 갈래를 만든다.** 도크 마감을 한 가지 폭으로 흩으면 전부 넉넉해져
-   지연이 아무 데도 안 걸린다. 3할은 빠듯하게, 나머지는 넉넉하게.
-5. **차종 구성이 물동량을 감당해야 한다.** 트립 무게가 19~21톤이면 실을 수 있는
-   차가 25톤 트레일러뿐이다. 5대로는 한 대에 열 건이 쌓인다(→10대로 늘렸다).
-6. `--reset` 시 **FK 역순으로** 지운다. 새 자식 테이블을 만들면 삭제 목록에도
-   추가할 것 — 안 그러면 다음 `--reset` 이 FK 로 죽는다. FK 만이 아니라
-   **트리거 순서**도 본다 (`trg_actual_close_guard` — 9절).
-7. **지표가 자기 꼬리를 물지 않는지 본다.** 확정 관문이 인수증 없는 실적을
-   막으므로, 확정분만 세는 인수증 완료율은 정의상 늘 100% 다. 시드를 어떻게
-   바꿔도 안 움직이는 지표는 시드 문제가 아니라 정의 문제다.
-8. **표본이 작으면 비율이 톱니가 된다.** 하루 2~6건에서 정시율은
-   0/33/50/100 만 나온다. 추세선을 쓰는 화면은 하루 물량이 그 추세를 감당할
-   만큼 있어야 한다.
-9. **고정 단가로 만든 금액은 상수 지표를 낳는다.** 매출을 `거리 × 1650`,
-   매입을 `거리 × 1280` 으로 만들면 마진율이 언제나 22.4% 다. 이제 시드가
-   `calculateRate()` 를 불러 트립 예상 운임을 뽑으므로 차종·거리구간·최소운임·
-   유류할증이 다 들어간다. **다만 매입표를 매출표의 상수배로 만들면 도로
-   같아진다** — `PAY_RATIO` 를 차종별로 갈라 둔 이유가 그것이다.
-10. **기준정보 시드는 덮어쓰지 않는다.** 코드 그룹처럼 운영자가 화면에서
-   고치는 표는, 시드가 다시 돌 때 **없는 것만 넣고 있는 것은 둔다.** 배포가
-   운영자의 수정을 되돌리면 그 화면은 두 번 다시 쓰이지 않는다.
-11. **시드가 앱의 서비스를 부른다.** 정산은 `SettlementService` 를 그대로
-   생성해 쓴다(`seedSettlements()`). `PrismaService` 는 `run()` 하나만 쓰이므로
-   그 메서드만 갖춘 대역을 넘기면 된다. 시드가 자기 계산을 따로 가지면 데모의
-   숫자와 「운임 재산출」을 누른 뒤의 숫자가 갈라지고, 그때 사람은 시드가
-   아니라 **화면**을 의심한다.
-12. **달마다 다른 국면을 만든다.** 관문 화면은 각 단이 **줄어드는 폭**이
-   요점이다. 전부 수금까지 끝내 놓으면 단이 하나로 보이고, 전부 미정산으로
-   두면 아랫단이 빈다. 가장 오래된 달은 마감까지, 가운데 달은 수금 중,
-   이번 달은 진행 중 — 그리고 **마감할 수 있는 달을 하나 남긴다.** 관문
-   화면에 눌러 볼 것이 없으면 그 화면은 읽기 전용이 된다.
-13. **완납을 배열 앞쪽에 둔다.** 매출은 화주 4곳, 매입은 운송사 5곳이라
-   나머지 연산의 뒤쪽 자리는 매입에만 돌아간다. 완납을 뒤에 두면 매입만
-   전액 지급되고 매출은 부분수납에서 끊겨, 마지막 단에서 **마진이 음수인
-   띠**가 그려진다.
-
----
-
-## 9. 마지막 작업 — 실적 확정 · 시스템관리 · 정산
+## 6. 마지막 작업 — 실적 확정 · 시스템관리 · 정산
 
 ### 실적 — 축을 90도 돌렸다
 
@@ -673,7 +386,7 @@ POST  /settlements/closes  /closes/:id/reopen   마감 · 해제(사유 필수)
 
 ---
 
-## 10. 다음 사람에게
+## 7. 다음 사람에게
 
 파이프라인은 닫혔다. 오더에서 돈까지 한 바퀴가 화면으로 돈다. 다음에 손댈
 것들은 2절의 "손 안 댄 채 적어만 둔 것" 에 있고, 어느 것도 급하지 않다.
@@ -682,7 +395,7 @@ POST  /settlements/closes  /closes/:id/reopen   마감 · 해제(사유 필수)
 
 ### 축부터 정한다
 
-새 화면을 만들면 **그 화면의 축이 무엇인지 먼저 정한다** (7절). 표를 먼저 그리고
+새 화면을 만들면 **그 화면의 축이 무엇인지 먼저 정한다** (5절). 표를 먼저 그리고
 축을 나중에 붙이면 축이 안 붙는다. 축은 방향을 갖는다 — "오른쪽이 무엇인가" 를
 정하면 나머지가 따라온다.
 
@@ -704,18 +417,42 @@ POST  /settlements/closes  /closes/:id/reopen   마감 · 해제(사유 필수)
 | 화면이 멀쩡한데 날짜가 하루 밀렸다 | `date` 컬럼에 로컬 자정을 넣었다 (4절) |
 | 조회 결과가 0행인데 오류는 없다 | `prisma.run()` 밖에서 불렀다 · psql 을 `ntms_app` 으로 붙었다 (4절) |
 | 권한을 잠갔는데 아무나 들어온다 | `@Roles` 만 있고 그것을 읽는 가드가 없었다 (4절) |
-| 지표가 시드를 바꿔도 안 움직인다 | 정의가 자기 꼬리를 문다 (8절 7번) · 고정 단가 (8절 9번) |
-| 금액이 나오는데 틀렸다 | 승인된 운임표가 키 충돌로 사라졌다 (9절) |
+| 지표가 시드를 바꿔도 안 움직인다 | 정의가 자기 꼬리를 문다 · 고정 단가 ([시드 규칙](07-development/seed.md) 7·9번) |
+| 금액이 나오는데 틀렸다 | 승인된 운임표가 키 충돌로 사라졌다 (6절) |
 
 공통점은 **화면이 정상으로 그려진다**는 것이다. 그래서 "화면이 뜬다" 는
 검증이 아니다. 시드를 돌리고 `ADMIN_DATABASE_URL` 로 행을 직접 세어 볼 것.
 
 ---
 
-## 11. 더 볼 것
 
-- `db/README.md` — 스키마 · 마이그레이션
-- `docker/README.md` — 가동계 배포 절차
-- `docs/design-system.md` — 토큰 · 타이포 · 컴포넌트
-- 커밋 메시지 — 각 단계에서 **왜 그렇게 했는지**를 길게 적어 뒀다.
-  `git log --format='%h %s%n%n%b' -12` 로 훑으면 판단의 흐름이 보인다.
+## 8. 문서 지도
+
+이 문서가 입구다. 여기 없는 것은 아래에 있다.
+
+| 어디 | 무엇 |
+|---|---|
+| [`06-frontend/design-system.md`](06-frontend/design-system.md) | 토큰 · 타이포 · 컴포넌트 |
+| [`06-frontend/design-guide.md`](06-frontend/design-guide.md) | 새 화면을 만들 때 지켜야 하는 것 · 글쓰기 |
+| [`07-development/local-setup.md`](07-development/local-setup.md) | 로컬에서 띄우기 · 자주 밟는 것 |
+| [`07-development/seed.md`](07-development/seed.md) | 시드가 지켜야 하는 것 13가지 |
+| [`08-testing/README.md`](08-testing/README.md) | 무엇을 테스트하고 무엇을 안 하나 |
+| [`09-operations/deploy.md`](09-operations/deploy.md) | 가동계 주소 · 배포 · 시드 적재 |
+| [`09-operations/monitoring.md`](09-operations/monitoring.md) | Prometheus · Loki · Grafana |
+| `../db/README.md` | 스키마 · 마이그레이션 |
+| `../docker/README.md` | 컨테이너 구성 |
+
+`docs/screenshots/` 는 `.gitignore` 에 걸려 있어 **저장소에 없다.** 화면을
+다시 찍어야 하면 로컬에서 만든다.
+
+### 결정 기록(ADR)을 따로 두지 않는 이유
+
+폴더를 만들었다가 지웠다. 이 저장소는 **커밋 메시지**가 그 역할을 하고 있다 —
+각 단계에서 왜 그렇게 했는지를 본문에 길게 적는다. 이미 잘 돌고 있는 것 옆에
+형식을 하나 더 만들면, 둘 다 반쯤 채워진다.
+
+```bash
+git log --format='%h %s%n%n%b' -12
+```
+
+판단의 흐름을 훑고 싶으면 이것이 가장 빠르다.

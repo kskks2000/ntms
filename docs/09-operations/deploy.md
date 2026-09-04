@@ -1,0 +1,65 @@
+# 가동계 — 배포와 시드 적재
+
+서버 주소 · 배포 절차 · 시드 적재, 그리고 배포하며 밟았던 것.
+모니터링은 [monitoring.md](./monitoring.md), 전체 그림은
+[인수인계 문서](../handoff.md) 에 있다.
+
+**마지막 배포: 2026-08-22 커밋 `cbd5d9b`** (정산까지 전부, 시드 적재 완료 —
+`seed.js` 로 부대비 유형과 테넌트 사업자등록번호를 채운 뒤 `seed-demo.js --reset`).
+지금 무엇이 올라가 있는지는 `ssh ntms 'cd /opt/ntms && git log --oneline -1'` 로 본다.
+
+- VM `175.45.193.174` · **정규 주소는 `http://www.qqq.ai.kr`**
+  - apex `qqq.ai.kr` 은 nginx 가 www 로 301 한다. 공인 IP 는 catch-all 로 그대로
+    열려 있다 — `deploy.sh` 의 배포 검증이 IP 로 들어오기 때문이다.
+  - `PUBLIC_ORIGIN` 이 정규 주소를 들고, 여기서 `CORS_ORIGIN`(api)과
+    `NEXT_PUBLIC_API_URL`(web 빌드 인자)이 파생된다. **바꾸면 재빌드가 필요하다** —
+    `NEXT_PUBLIC_*` 는 빌드 시점에 박힌다. `deploy.sh` 는 `up -d --build` 라 같이 된다.
+  - 다만 브라우저가 실제로 부르는 주소는 `apps/web/src/lib/api-client.ts` 의
+    `const BASE = '/api'` — **상대경로**다. 그래서 어느 이름으로 들어와도 같은
+    출처의 `/api` 를 부르고, CORS 와 쿠키 도메인 문제가 애초에 안 생긴다.
+    `PUBLIC_ORIGIN` 이 틀려도 화면은 멀쩡히 도는 이유가 이것이다 — 값이 맞는지는
+    화면으로 확인할 수 없으니 `.env` 를 직접 볼 것.
+  - 리프레시 쿠키에 `domain` 속성이 없다(host-only). 이름이 여럿이면 이름마다
+    세션이 따로 생긴다 — apex 를 301 로 접은 이유다.
+- nginx :80 만. HTTPS 없음 → `COOKIE_SECURE=false` (임시. API 기동 시 경고 로그)
+- 로그인 `NTMS` / `admin` / `Ntms#Prod2026!`
+  (시드 비밀번호가 저장소에 있고 서버가 공인 IP라 바꿨다)
+
+```bash
+# 배포
+git push origin dev
+ssh ntms 'cd /opt/ntms && git fetch origin && git reset --hard origin/dev -q'
+ssh ntms 'cd /opt/ntms && bash docker/deploy.sh'
+```
+
+```bash
+# 시드 — ADMIN_DATABASE_URL 을 일회성 컨테이너에만 주입한다
+ssh ntms 'cd /opt/ntms && set -a && . ./.env && set +a && \
+  docker compose -f docker/docker-compose.yml --env-file .env run --rm --no-deps \
+  -e ADMIN_DATABASE_URL="postgresql://ntms_admin:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ntms}?schema=ntms" \
+  api node apps/api/dist/scripts/seed.js'
+```
+
+`seed-demo.js` 도 같은 방식이되 **비밀번호를 반드시 갈아끼운다.** 안 넣으면
+저장소에 적힌 값으로 데모 계정 18개가 생기고, 이 서버는 공인 IP 에 HTTP 다.
+
+```bash
+ssh ntms 'cd /opt/ntms && set -a && . ./.env && set +a &&   docker compose -f docker/docker-compose.yml --env-file .env run --rm --no-deps   -e ADMIN_DATABASE_URL="postgresql://ntms_admin:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ntms}?schema=ntms"   -e DEMO_USER_PASSWORD="$(openssl rand -base64 18)"   api node apps/api/dist/scripts/seed-demo.js -- --reset'
+```
+
+무작위로 넣으면 그 계정으로는 아무도 못 들어온다 — 데모 화면을 채우는 것이
+목적이고 로그인은 `admin` 으로 하기 때문에 그것으로 충분하다. 시드 로그
+끝줄이 `(비밀번호: 환경변수)` 인지 확인할 것.
+
+`docker-compose.yml` 의 api 서비스에 `ADMIN_DATABASE_URL` 을 **넣지 말 것.**
+앱 컨테이너가 BYPASSRLS DSN 을 상시 들고 있으면 침해 시 테넌트 격리가 통째로
+무너진다.
+
+## 밟았던 것
+
+- **동적 경로가 502** — nginx `proxy_buffer_size` 4k 가 Next.js 의 폰트 preload
+  `link:` 헤더보다 작았다. 64k / `proxy_buffers 8 64k` 로 올려 해결.
+- **새로고침하면 로그아웃** — `cookieSecure = isProd` 인데 HTTP 라 쿠키가 안
+  실렸다. `COOKIE_SECURE` 환경변수로 분리.
+- **DNS lame delegation** — `.kr` 이 gabia NS 를 가리키는데 gabia 가 REFUSED.
+  사용자가 직접 고쳤다. 서버 쪽(`server_name _;`)은 처음부터 정상이었다.
