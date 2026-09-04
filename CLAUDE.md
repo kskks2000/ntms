@@ -89,8 +89,10 @@ psql 로 확인할 때는 `ADMIN_DATABASE_URL`(BYPASSRLS)을 쓴다 — `DATABAS
 
 - **주석은 한국어로, "왜" 와 "안 그러면 무슨 일이 나는가" 를 적는다.** "무엇"은
   코드가 이미 말한다. 기존 주석의 밀도와 어조를 그대로 따른다.
-- **커밋 메시지 본문을 길게 쓴다.** 이 저장소는 ADR 대신 커밋 메시지가 결정
-  기록 역할을 한다. `git log --format='%h %s%n%n%b' -12` 로 흐름이 읽힌다.
+- **커밋 메시지 본문을 길게 쓴다.** 왜 그렇게 했는지가 여기 남는다.
+  `git log --format='%h %s%n%n%b' -12` 로 판단의 흐름이 읽힌다. 오래 갈 결정은
+  `docs/01-decisions/` 에 ADR 로 따로 남긴다 — 템플릿의 `재검토 조건` 칸이
+  커밋과의 차이다.
 - **테스트는 `test/` 에 둔다.** `src/` 안에 두면 빌드 tsconfig 가 그대로 dist 로
   내보낸다. 대신 빌드용 설정은 test 를 안 보므로 패키지마다 `tsconfig.test.json`
   이 따로 있고 `typecheck` 가 두 번 돈다.
@@ -130,4 +132,4 @@ db/             DDL 원본 · 마이그레이션          docker/  가동계 배
 ```
 
 가동계는 `http://www.qqq.ai.kr` (apex 는 www 로 301, 공인 IP 도 열려 있다).
-배포·모니터링 절차는 `docs/` 의 operations 폴더에 있다.
+배포·모니터링 절차는 [`docs/10-operations/`](docs/10-operations/) 에 있다.

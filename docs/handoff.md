@@ -173,13 +173,13 @@ ntms_admin  BYPASSRLS  시드·점검 전용. 앱 컨테이너에 절대 넣지 
 
 ### 여기까지 읽었으면 띄워 본다
 
-절차는 [`07-development/local-setup.md`](07-development/local-setup.md) 에 있다 —
+절차는 [`08-development/local-setup.md`](08-development/local-setup.md) 에 있다 —
 DDL 부터 시드까지 순서대로, 그리고 로컬에서 자주 밟는 것들.
 데이터가 어떤 모양이어야 하는지는
-[`07-development/seed.md`](07-development/seed.md), 검증은
-[`08-testing/README.md`](08-testing/README.md).
+[`08-development/seed.md`](08-development/seed.md), 검증은
+[`09-testing/테스트-전략.md`](09-testing/테스트-전략.md).
 
-가동계에 올리는 것은 [`09-operations/deploy.md`](09-operations/deploy.md) 다.
+가동계에 올리는 것은 [`10-operations/배포-절차.md`](10-operations/배포-절차.md) 다.
 **로컬과 서버의 비밀번호가 일부러 다르다**는 것만 위에서 다시 확인하고 넘어갈 것.
 
 ---
@@ -417,7 +417,7 @@ POST  /settlements/closes  /closes/:id/reopen   마감 · 해제(사유 필수)
 | 화면이 멀쩡한데 날짜가 하루 밀렸다 | `date` 컬럼에 로컬 자정을 넣었다 (4절) |
 | 조회 결과가 0행인데 오류는 없다 | `prisma.run()` 밖에서 불렀다 · psql 을 `ntms_app` 으로 붙었다 (4절) |
 | 권한을 잠갔는데 아무나 들어온다 | `@Roles` 만 있고 그것을 읽는 가드가 없었다 (4절) |
-| 지표가 시드를 바꿔도 안 움직인다 | 정의가 자기 꼬리를 문다 · 고정 단가 ([시드 규칙](07-development/seed.md) 7·9번) |
+| 지표가 시드를 바꿔도 안 움직인다 | 정의가 자기 꼬리를 문다 · 고정 단가 ([시드 규칙](08-development/seed.md) 7·9번) |
 | 금액이 나오는데 틀렸다 | 승인된 운임표가 키 충돌로 사라졌다 (6절) |
 
 공통점은 **화면이 정상으로 그려진다**는 것이다. 그래서 "화면이 뜬다" 는
@@ -428,28 +428,36 @@ POST  /settlements/closes  /closes/:id/reopen   마감 · 해제(사유 필수)
 
 ## 8. 문서 지도
 
-이 문서가 입구다. 여기 없는 것은 아래에 있다.
+이 문서가 입구다. 여기 없는 것은 아래에 있다. 폴더 배치의 규칙과 전체
+라우팅 테이블은 [`README.md`](README.md) 를 본다.
 
 | 어디 | 무엇 |
 |---|---|
-| [`06-frontend/design-system.md`](06-frontend/design-system.md) | 토큰 · 타이포 · 컴포넌트 |
-| [`06-frontend/design-guide.md`](06-frontend/design-guide.md) | 새 화면을 만들 때 지켜야 하는 것 · 글쓰기 |
-| [`07-development/local-setup.md`](07-development/local-setup.md) | 로컬에서 띄우기 · 자주 밟는 것 |
-| [`07-development/seed.md`](07-development/seed.md) | 시드가 지켜야 하는 것 13가지 |
-| [`08-testing/README.md`](08-testing/README.md) | 무엇을 테스트하고 무엇을 안 하나 |
-| [`09-operations/deploy.md`](09-operations/deploy.md) | 가동계 주소 · 배포 · 시드 적재 |
-| [`09-operations/monitoring.md`](09-operations/monitoring.md) | Prometheus · Loki · Grafana |
+| [`07-ui/design-system.md`](07-ui/design-system.md) | 토큰 · 타이포 · 컴포넌트 |
+| [`07-ui/design-guide.md`](07-ui/design-guide.md) | 새 화면을 만들 때 지켜야 하는 것 · 글쓰기 |
+| [`08-development/local-setup.md`](08-development/local-setup.md) | 로컬에서 띄우기 · 자주 밟는 것 |
+| [`08-development/seed.md`](08-development/seed.md) | 시드가 지켜야 하는 것 13가지 |
+| [`09-testing/테스트-전략.md`](09-testing/테스트-전략.md) | 무엇을 테스트하고 무엇을 안 하나 |
+| [`10-operations/배포-절차.md`](10-operations/배포-절차.md) | 가동계 주소 · 배포 · 시드 적재 |
+| [`10-operations/모니터링.md`](10-operations/모니터링.md) | Prometheus · Loki · Grafana |
+| [`01-decisions/`](01-decisions/) | 설계 결정 기록(ADR) |
 | `../db/README.md` | 스키마 · 마이그레이션 |
 | `../docker/README.md` | 컨테이너 구성 |
 
 `docs/screenshots/` 는 `.gitignore` 에 걸려 있어 **저장소에 없다.** 화면을
 다시 찍어야 하면 로컬에서 만든다.
 
-### 결정 기록(ADR)을 따로 두지 않는 이유
+### 결정 기록 — 커밋 메시지와 ADR
 
-폴더를 만들었다가 지웠다. 이 저장소는 **커밋 메시지**가 그 역할을 하고 있다 —
-각 단계에서 왜 그렇게 했는지를 본문에 길게 적는다. 이미 잘 돌고 있는 것 옆에
-형식을 하나 더 만들면, 둘 다 반쯤 채워진다.
+이 저장소는 오랫동안 **커밋 메시지**가 결정 기록 역할을 해 왔다. 각 단계에서
+왜 그렇게 했는지를 본문에 길게 적는 방식이고, 지금도 그렇다.
+
+[`01-decisions/`](01-decisions/) 는 그것을 대체하는 것이 아니라 **오래 가는 것**을
+따로 담는다 — 커밋은 "그때 왜 그렇게 고쳤나" 를 답하지만, "이 구조를 왜 이렇게
+골랐고 언제 다시 볼 것인가" 는 커밋 하나에 담기지 않는다. 템플릿의
+`재검토 조건` 칸이 그 차이다.
+
+지난 흐름을 훑고 싶으면 여전히 커밋이 가장 빠르다.
 
 ```bash
 git log --format='%h %s%n%n%b' -12

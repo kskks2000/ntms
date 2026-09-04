@@ -51,10 +51,12 @@ docker/           가동계 배포
 | 문서 | 내용 |
 |---|---|
 | [`docs/handoff.md`](docs/handoff.md) | **인수인계 — 여기부터.** 진행 상황 · 규칙 · 지뢰 · 문서 지도 |
-| [`docs/06-frontend/`](docs/06-frontend/) | 디자인 시스템 "관제" · 화면을 만들 때 지켜야 하는 것 |
-| [`docs/07-development/`](docs/07-development/) | 로컬에서 띄우기 · 시드 규칙 |
-| [`docs/08-testing/`](docs/08-testing/) | 무엇을 테스트하고 무엇을 안 하나 |
-| [`docs/09-operations/`](docs/09-operations/) | 가동계 배포 · 모니터링 |
+| [`docs/README.md`](docs/README.md) | **문서 라우팅 테이블** — 어느 폴더를 언제 읽는가 |
+| [`docs/01-decisions/`](docs/01-decisions/) | 설계 결정 기록(ADR) |
+| [`docs/07-ui/`](docs/07-ui/) | 디자인 시스템 "관제" · 화면을 만들 때 지켜야 하는 것 |
+| [`docs/08-development/`](docs/08-development/) | 로컬에서 띄우기 · 시드 규칙 |
+| [`docs/09-testing/`](docs/09-testing/) | 무엇을 테스트하고 무엇을 안 하나 |
+| [`docs/10-operations/`](docs/10-operations/) | 가동계 배포 · 모니터링 |
 | [`db/README.md`](db/README.md) | 스키마 · 마이그레이션 |
 | [`docker/README.md`](docker/README.md) | 컨테이너 구성 |
 

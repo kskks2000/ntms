@@ -132,3 +132,8 @@ db/backup/
 
 # 세션 중 만든 화면 캡처. 금방 낡고 저장소만 무거워진다
 docs/screenshots/
+
+# 진행 중 작업 메모 — README만 추적
+notes/*
+!notes/README.md
+

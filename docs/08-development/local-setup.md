@@ -21,7 +21,7 @@ pnpm dev                                    # api :4000 + web :3000
 데모 계정 18명(`jhkim` `sylee` `bwoh` …)의 비밀번호는 `DEMO_USER_PASSWORD`
 환경변수로 정하고, 안 주면 로컬 기본값을 쓴다. **가동계에서는 반드시 넣는다**
 — 안 넣으면 저장소에 적힌 비밀번호 계정이 열여덟 개 생긴다.
-[가동계 배포](../09-operations/deploy.md) 참고.
+[가동계 배포](../10-operations/배포-절차.md) 참고.
 
 ## 자주 밟는 것
 
