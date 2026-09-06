@@ -1,5 +1,7 @@
 # NTMS 인수인계
 
+> 최종 수정: 2026-09-06 · 기능 마지막 진전: 2026-08-22 (정산 — 파이프라인이 닫혔다)
+
 이 문서는 **다음 사람(또는 다음 세션)이 이어서 개발할 수 있게** 쓴 것이다.
 **여기가 입구다** — 처음부터 끝까지 한 번 읽는 것을 전제로 쓴다.
 
@@ -9,8 +11,6 @@
 
 특히 4절 「절대 어기면 안 되는 것」은 나누지 않았다. 흩어 놓으면 "먼저 읽어야
 할 것" 이라는 성격이 사라지고, 그러면 다음 사람이 같은 지뢰를 다시 밟는다.
-
-마지막 갱신: 2026-08-22 (정산 — 파이프라인이 닫혔다)
 
 ---
 
@@ -261,22 +261,25 @@ DB 는 DISPATCH 를 PLAN 에, RATE 를 MASTER 에 접어 두었는데, 화면을
 
 ### 창구
 
-```
-GET   /actuals?from=&to=&status=&blockedOnly=   목록 + 요약
-POST  /actuals/generate                          실행 → 실적 생성 (from·to 필요)
-POST  /actuals/confirm                           일괄 확정 — 관문에 걸리면 건별 사유
-GET   /actuals/:id                               편차 축 · 관문 · 정차 · 예외 · 이력
-POST  /actuals/:id/hold  /reopen                 보류 · 확정해제 (사유 필수)
-GET   /actuals/daily?date=   /kpi?from=&to=      운행일보 · KPI
-POST  /actuals/rebuild                           집계 다시 찍기
+창구 목록은 여기 베끼지 않는다 — **컨트롤러가 원본이다.**
+`actual.controller.ts` · `system.controller.ts` 를 읽는 것이 언제나 정확하다.
+한동안 이 자리에 목록을 적어 두었는데 창구가 늘어나는 속도를 문서가 못 따라가
+실제로 어긋났다(`PATCH /actuals/:id`, 코드그룹 생성·수정·순서변경이 빠져 있었다).
+설계 원칙과 오류 규약은 [`06-api/`](06-api/) 에 둔다.
 
-GET   /system/users?…  /users/:id  /roles        계정 · 권한 격자
-PATCH /system/users/:id                          역할은 지우고 다시 넣는다(감사 가독성)
-POST  /system/users/:id/unlock  /deactivate      사유 필수. 막을 땐 세션도 끊는다
-GET   /system/code-groups  /:groupId             그룹 · 코드 · 미리보기
-POST  PATCH DELETE  …/codes…                     잠긴 그룹은 사유별로 다르게 거절
-GET   /system/audit?…  /:id  /trail  /facets     변경 목록 · 바뀐 칸 · 레코드 내력
-```
+대신 **목록만 봐서는 안 보이는 것**을 적어 둔다.
+
+- **일괄 확정은 건별로 거절한다.** 스무 건을 확정하면 관문에 걸린 것만 사유와
+  함께 돌아오고 나머지는 확정된다. 하나가 막았다고 전부 되돌리면 사람은 어느
+  것이 문제인지 모른 채 스무 번을 다시 눌러야 한다.
+- **목록의 정렬 키는 허용목록으로 받는다.** 쿼리 문자열을 `orderBy` 에 그대로
+  넘기지 않는다 — 열어 두면 Prisma 가 모르는 칸에 500 을 내거나, 더 나쁘게는
+  의도치 않은 칸으로 정렬한다.
+- **계정을 막을 때 세션도 끊는다**(`user_session.revoked_at`). 역할만 회수하면
+  액세스 토큰 수명 15분이 남는다(4절).
+- **사유가 필수인 창구가 있다** — 보류 · 확정해제 · 잠금해제 · 비활성화 ·
+  마감 해제. zod 가 `min(1)` 로 막으므로 빈 문자열은 컨트롤러를 못 지난다.
+  되돌리거나 남의 일을 뒤집는 동작이라 감사로그에 근거가 남아야 한다.
 
 ### 이번에 고친 것
 
@@ -327,20 +330,19 @@ GET   /system/audit?…  /:id  /trail  /facets     변경 목록 · 바뀐 칸 �
 
 ### 창구 (정산)
 
-```
-GET   /settlements/summary?yearMonth=          CashLadder
-GET   /settlements?settlementType=&yearMonth=…  목록 (정렬 키는 허용목록)
-POST  /settlements/generate                     미정산 확정실적 → 거래처·월별로 묶는다
-GET   /settlements/:id                          명세 · 부대비 · 조정 · 산출근거 · 관문
-POST  /settlements/:id/calculate                운임 재산출 (수기 줄은 지킨다)
-PATCH /settlements/:id/status                   상태 전이 — 관문을 못 넘으면 사유
-POST  /settlements/:id/charges  /adjustments    부대비 · 조정 전표
-POST  /settlements/:id/invoice                  세금계산서 발행
-GET   /settlements/invoices  /aging             계산서 · 미수 연령
-POST  /settlements/payments                     수납 · 지급 (부분이면 PARTIALLY_PAID)
-GET   /settlements/closes?settlementType=&year= 마감 관문
-POST  /settlements/closes  /closes/:id/reopen   마감 · 해제(사유 필수)
-```
+마찬가지로 `settlement.controller.ts` 가 원본이다. 여기서도 목록 대신 **읽을 때**
+**헷갈리는 것**만 적는다.
+
+- **상태를 움직이는 창구가 `PATCH /:id/status` 하나가 아니다.** `reopen` ·
+  `dispute` · `partner-confirm` 이 각각 따로 있다. 상태표만 보고 전이를 찾으면
+  절반을 놓친다.
+- **수납·지급 창구만 경로가 `/:id` 바깥이다** (`POST /settlements/payments`).
+  정산 id 는 본문에 들어간다. **계산서가 나간 정산에만**(`INVOICED` ·
+  `PARTIALLY_PAID`) 받고 남은 금액을 넘기면 거절한다(`PAYMENT_OVER`).
+  전액이 안 차면 `PARTIALLY_PAID` 로 멈춘다 — 사다리 아랫단이 그 폭이다.
+- **「운임 재산출」은 수기로 고친 줄을 지킨다**(`is_manual`). 사람이 근거를 갖고
+  넣은 값을 버튼 한 번이 덮으면, 누른 사람은 자기가 무엇을 바꿨는지 모른다.
+- 부대비와 조정 전표는 등록만이 아니라 **수정·삭제 창구까지** 있다.
 
 ### 이번에 고친 것 — 승인된 운임표가 조용히 사라지고 있었다
 
@@ -440,7 +442,7 @@ POST  /settlements/closes  /closes/:id/reopen   마감 · 해제(사유 필수)
 | [`09-testing/테스트-전략.md`](09-testing/테스트-전략.md) | 무엇을 테스트하고 무엇을 안 하나 |
 | [`10-operations/배포-절차.md`](10-operations/배포-절차.md) | 가동계 주소 · 배포 · 시드 적재 |
 | [`10-operations/모니터링.md`](10-operations/모니터링.md) | Prometheus · Loki · Grafana |
-| [`01-decisions/`](01-decisions/) | 설계 결정 기록(ADR) |
+| [`01-decisions/`](01-decisions/) | 설계 결정 기록(ADR) — 지금은 `0001` REST 결정 하나 |
 | `../db/README.md` | 스키마 · 마이그레이션 |
 | `../docker/README.md` | 컨테이너 구성 |
 
