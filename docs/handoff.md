@@ -1,6 +1,6 @@
 # NTMS 인수인계
 
-> 최종 수정: 2026-09-06 · 기능 마지막 진전: 2026-08-22 (정산 — 파이프라인이 닫혔다)
+> 최종 수정: 2026-09-13 · 기능 마지막 진전: 2026-08-22 (정산 — 파이프라인이 닫혔다)
 
 이 문서는 **다음 사람(또는 다음 세션)이 이어서 개발할 수 있게** 쓴 것이다.
 **여기가 입구다** — 처음부터 끝까지 한 번 읽는 것을 전제로 쓴다.
@@ -440,6 +440,7 @@ DB 는 DISPATCH 를 PLAN 에, RATE 를 MASTER 에 접어 두었는데, 화면을
 | [`08-development/local-setup.md`](08-development/local-setup.md) | 로컬에서 띄우기 · 자주 밟는 것 |
 | [`08-development/seed.md`](08-development/seed.md) | 시드가 지켜야 하는 것 13가지 |
 | [`09-testing/테스트-전략.md`](09-testing/테스트-전략.md) | 무엇을 테스트하고 무엇을 안 하나 |
+| [`10-operations/배포-따라하기.md`](10-operations/배포-따라하기.md) | 처음 배포하는 사람용 단계별 안내 · 로컬 리허설 · 되돌리기 |
 | [`10-operations/배포-절차.md`](10-operations/배포-절차.md) | 가동계 주소 · 배포 · 시드 적재 |
 | [`10-operations/모니터링.md`](10-operations/모니터링.md) | Prometheus · Loki · Grafana |
 | [`01-decisions/`](01-decisions/) | 설계 결정 기록(ADR) — 지금은 `0001` REST 결정 하나 |

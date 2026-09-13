@@ -2,12 +2,17 @@
 
 NAVER Cloud 단일 VM(Rocky Linux 8 · vCPU 2 · RAM 16GB)에 Docker 스택으로 배포한다.
 
+> **처음 해 보는 사람은 [`docs/10-operations/배포-따라하기.md`](../docs/10-operations/배포-따라하기.md)
+> 부터.** 로컬 리허설 → 서버 배포 → 되돌리기를 단계마다 정상 출력과 함께 적었다.
+> 이 파일은 그 단계들의 배경과 서버 최초 준비를 담는 참조다.
+
 | 항목 | 값 |
 |---|---|
 | 공인 IP | `175.45.193.174` |
 | 접속 계정 | `root` (PEM 키) |
 | 배포 경로 | `/opt/ntms` |
-| 외부 노출 | nginx `80` (HTTPS 는 도메인 확보 후) |
+| 정규 주소 | `http://www.qqq.ai.kr` (apex 는 www 로 301) |
+| 외부 노출 | nginx `80` (HTTPS 는 보류 — 7장) |
 | 내부 전용 | postgres · redis · api · web — 호스트 포트를 열지 않는다 |
 
 구성 요소와 튜닝값은 `docker-compose.yml`, 스키마 설계는 `../db/README.md` 를 본다.
@@ -88,7 +93,16 @@ openssl rand -base64 48 | tr -d '\n'; echo    # JWT_REFRESH_SECRET
 
 ```ini
 NODE_ENV=production
-PUBLIC_ORIGIN=http://175.45.193.174
+PUBLIC_ORIGIN=http://www.qqq.ai.kr
+
+# HTTPS 가 없는 동안은 반드시 false. 비우면 production 이라 Secure 쿠키가 나가고,
+# 평문 HTTP 에서는 브라우저가 그 쿠키를 버려 새로고침마다 로그아웃된다.
+COOKIE_SECURE=false
+
+# 모니터링 롤. 첫 배포는 .env.example 의 자리표시 값 그대로 두고, 배포가 끝나면
+#   bash docker/monitoring/create-exporter-role.sh
+# 가 DB 롤을 만들고 이 줄을 실제 값으로 바꾼다. 비워 두면 compose 가 모든 명령을 거절한다.
+POSTGRES_EXPORTER_PASSWORD=issued-by-create-exporter-role-sh
 
 POSTGRES_PASSWORD=<위에서 생성한 hex>
 REDIS_PASSWORD=<위에서 생성한 hex>
@@ -144,7 +158,7 @@ vCPU 2 기준 **최초 빌드는 10분 안팎** 걸린다(pnpm 설치 + Next.js 
 (로컬 검증에서 확인된 값이다.)
 
 ```bash
-# 컨테이너 상태 — 5개 모두 healthy
+# 컨테이너 상태 — 앱 5개(postgres redis api web nginx) healthy, 모니터링까지 13개 Up
 docker compose -f docker/docker-compose.yml --env-file .env ps
 
 # API (nginx 경유) — db:true 여야 DB 접속까지 정상
@@ -156,7 +170,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://175.45.193.174/
 ```
 
 ```bash
-# 스키마 — 일반 테이블 77 · ENUM 56 · RLS 정책 115
+# 스키마 — 일반 테이블 78 · ENUM 56 · RLS 정책 115 (2026-09-13 가동계 실측)
 docker exec -it ntms-postgres psql -U postgres -d ntms
 
 -- RLS 미적용 테이블 (0건이어야 정상)
@@ -299,8 +313,9 @@ bash docker/deploy.sh --no-pull
 
 ## 7. HTTPS (도메인 확보 후)
 
-**지금은 불가능하다.** Let's Encrypt 는 공인 IP 에 대해 인증서를 발급하지 않는다.
-도메인이 준비된 뒤에 진행한다.
+도메인(`www.qqq.ai.kr`)은 준비됐고 **HTTPS 는 보류 중이다** — "나중에 계획 생기면
+그때" 로 정했다(인수인계 2절). Let's Encrypt 는 공인 IP 에는 발급하지 않으므로
+도메인 이름으로 발급받는다. 켜면 `.env` 의 `COOKIE_SECURE=false` 줄을 지운다.
 
 1. 도메인 A 레코드를 `175.45.193.174` 로 지정
 2. `.env` 의 `PUBLIC_ORIGIN` 을 `https://<도메인>` 으로 변경
@@ -339,6 +354,7 @@ bash docker/deploy.sh --no-pull
 
 - **SSH 접근 제한** — 22 번이 전 세계에 열려 있고 `root` 직접 로그인 구성이다.
   ACG 에서 소스 IP 를 사무실 대역으로 좁히는 것을 권한다.
-- **HTTPS** — 도메인 확보 후.
+- **HTTPS** — 도메인은 있고, 켜는 시점을 보류 중이다(7장).
 - **백업 자동화** — 위 `pg_dump` 를 cron 에 걸고 외부 스토리지로 옮기는 절차 미정.
-- **모니터링 · 로그 수집** — 미정.
+- ~~모니터링 · 로그 수집~~ — 2026-08-25 에 붙였다. [`docs/10-operations/모니터링.md`](../docs/10-operations/모니터링.md)
+- **이미지 버전 보관** — 태그가 늘 `latest` 라 되돌리려면 옛 소스로 다시 빌드해야 한다(5~10분).
